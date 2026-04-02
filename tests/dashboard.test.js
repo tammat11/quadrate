@@ -371,11 +371,13 @@ test('фильтр месяца режет обзвон и обучение по
             {
                 ufCrm173Partner: 'p1',
                 createdTime: '2026-03-05T10:00:00+03:00',
+                ufCrm1731775114484085: '2026-03-04T10:00:00+03:00',
                 ufCrm173_1771396927: 141219
             },
             {
                 ufCrm173Partner: 'p1',
                 createdTime: '2026-02-05T10:00:00+03:00',
+                ufCrm1731775114484085: '2026-02-04T10:00:00+03:00',
                 ufCrm173_1771396927: 141215
             }
         ],
@@ -399,6 +401,36 @@ test('фильтр месяца режет обзвон и обучение по
 
     assert.equal(dashboard.getCallsQ('p1'), 2 / 3);
     assert.equal(dashboard.getTrainingQ('p1'), 0.5);
+});
+
+test('обзвон фильтруется по дате обзвона, а не по дате создания карточки', () => {
+    global.document = {
+        getElementById(id) {
+            if (id === 'monthSelect') return { value: '2026-03' };
+            return null;
+        }
+    };
+
+    dashboard.applyTestState({
+        callsItems: [
+            {
+                ufCrm173Partner: 'p1',
+                createdTime: '2026-04-05T10:00:00+03:00',
+                ufCrm1731775114484085: '2026-03-20T12:00:00+03:00',
+                ufCrm173_1771396927: 141219
+            },
+            {
+                ufCrm173Partner: 'p1',
+                createdTime: '2026-03-05T10:00:00+03:00',
+                ufCrm1731775114484085: '2026-01-20T12:00:00+03:00',
+                ufCrm173_1771396927: 141215
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+
+    assert.equal(dashboard.getCallsQ('p1'), 1);
 });
 
 test('Общий свод берет только месяцы в диапазоне март 2026 — март 2027', () => {

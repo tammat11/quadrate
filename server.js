@@ -67,6 +67,12 @@ function sendJson(res, statusCode, payload) {
     res.end(JSON.stringify(payload));
 }
 
+function getMissingBootstrapEnvVars() {
+    const missing = [];
+    if (!BITRIX_BASE) missing.push('BITRIX_BASE');
+    return missing;
+}
+
 function loadBootstrapCacheFromDisk() {
     try {
         if (!fs.existsSync(BOOTSTRAP_CACHE_FILE)) return;
@@ -402,6 +408,11 @@ async function fetchFotDbItems() {
 }
 
 async function buildBootstrapData() {
+    const missingEnvVars = getMissingBootstrapEnvVars();
+    if (missingEnvVars.length > 0) {
+        throw new Error(`Missing required env vars: ${missingEnvVars.join(', ')}`);
+    }
+
     const partnerList = await fetchAllListElements(117);
     const refList = await fetchAllListElements(115);
     const users = await fetchAllUsers();

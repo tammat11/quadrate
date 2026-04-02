@@ -15,6 +15,7 @@ const FIELDS = {
     MONTH_ACCRUAL: 'UF_CRM_1707145268405',
     PARTNER: 'UF_CRM_1743669674',
     CALLS_PARTNER: 'UF_CRM_173_PARTNER',
+    CALLS_DATE: 'UF_CRM_173_1775114484085',
     OPU_PARTNER: 'UF_CRM_127_1756273714',
     OPU_MONTH: 'UF_CRM_127_1756272780',
     OPU_MONTH_NUMBER: 'UF_CRM_127_1756290422310',
@@ -694,6 +695,13 @@ function getFieldValue(item, fieldName) {
         if (Object.hasOwn(item, variant)) return item[variant];
     }
 
+    const compactFieldName = String(fieldName).toLowerCase().replace(/_/g, '');
+    for (const [key, value] of Object.entries(item)) {
+        if (String(key).toLowerCase().replace(/_/g, '') === compactFieldName) {
+            return value;
+        }
+    }
+
     return undefined;
 }
 
@@ -1371,7 +1379,7 @@ function buildIndexes() {
 
     callsByPartner = {};
     for (const item of callsItems) {
-        const itemMonth = extractDealMonthKey(item, ['CREATED_TIME', 'UPDATED_TIME']);
+        const itemMonth = extractDealMonthKey(item, [FIELDS.CALLS_DATE, 'CREATED_TIME', 'UPDATED_TIME']);
         if (callsMonths ? !callsMonths.includes(itemMonth) : false) continue;
         const pid = getCallsPartnerId(item);
         if (!pid) continue;
