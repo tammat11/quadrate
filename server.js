@@ -413,22 +413,38 @@ async function buildBootstrapData() {
         throw new Error(`Missing required env vars: ${missingEnvVars.join(', ')}`);
     }
 
-    const partnerList = await fetchAllListElements(117);
-    const refList = await fetchAllListElements(115);
-    const users = await fetchAllUsers();
-    const companies = await fetchAllCompanies();
-    const deals69 = await fetchAllDeals(69, SELECT_DEALS);
-    const remarkDeals = await fetchAllDeals(81, SELECT_REMARKS);
-    const callsItems = await fetchAllItems(1364, { categoryId: 431 });
-    const disciplineItems = await fetchAllItems(1364, { categoryId: 439 });
-    const opuItems = await fetchAllItems(1254, { categoryId: 311 });
-    const managementItems = await fetchAllItems(1254, { categoryId: 441 });
-    let fotDbItems = [];
-    try {
-        fotDbItems = await fetchFotDbItems();
-    } catch (error) {
-        console.warn('fetchFotDbItems failed:', error.message || error);
-    }
+    const [
+        partnerList,
+        refList,
+        users,
+        companies
+    ] = await Promise.all([
+        fetchAllListElements(117),
+        fetchAllListElements(115),
+        fetchAllUsers(),
+        fetchAllCompanies()
+    ]);
+
+    const [
+        deals69,
+        remarkDeals,
+        callsItems,
+        disciplineItems,
+        opuItems,
+        managementItems,
+        fotDbItems
+    ] = await Promise.all([
+        fetchAllDeals(69, SELECT_DEALS),
+        fetchAllDeals(81, SELECT_REMARKS),
+        fetchAllItems(1364, { categoryId: 431 }),
+        fetchAllItems(1364, { categoryId: 439 }),
+        fetchAllItems(1254, { categoryId: 311 }),
+        fetchAllItems(1254, { categoryId: 441 }),
+        fetchFotDbItems().catch(error => {
+            console.warn('fetchFotDbItems failed:', error.message || error);
+            return [];
+        })
+    ]);
 
     const partnerMap = {};
     for (const el of partnerList) {
