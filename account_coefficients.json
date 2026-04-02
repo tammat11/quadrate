@@ -1,0 +1,758 @@
+[
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "Sinteks (Синтекс) TOO",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "TOO \"BI Service\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "«LPP Kazakhstan ЛПП Казахстан» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Эраунд Групп» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "ТОО \" Микрокредитная организация \"R-Finance\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Асхат Мусаев",
+    "company": "Мунайтелеком",
+    "coeff": null,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "AV traiding ТОО",
+    "coeff": null,
+    "status": "закрылись"
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "Евразийский Банк АО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "Kaspi bank AO",
+    "coeff": 1.1,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«АртГрад» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«Defacto Retail Store Kz» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "«The Caspian International Restaurants» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "ТОО \"West Sport Alliance KZ\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "«Magnum E-сommerce Kazakhstan» ТОО",
+    "coeff": 1.2,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ASBC Kazakhstan",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО \"RUKEA\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "«Forte Bank» АО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО \" Гидробаланс\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО \"Do-All\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "PROGA ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "ТОО \"Электроника-Е1\"",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "South Sales ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Дудар» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО «Delta Sport» (Делта Спорт)",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "АО «Bank RBK»",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "«TEMA RETAIL KZ» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "Банк Хоум Кредит ДБ АО",
+    "coeff": 1.1,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "ЧК \"BMT HOLDING LIMITED\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "\"АДИДАС\" ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО \"Galleon\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "ТОО \"БЕРЕКЕ АГРО ИНВЕСТ\" БЦ \"VERUM\"",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО \"Rich Family Company\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "«Alatau City Bank» АО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "«Kaspi Магазин», ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "MONOLIT-GROUP ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "ТОО\"Premium Beauty\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "Vision Auto ТОО",
+    "coeff": null,
+    "status": "закрылись"
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "TOO New Generation School Astana",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО \"Rice Capital\"",
+    "coeff": 0.9,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "Яблоко Бьюти Маркет KZ ТОО",
+    "coeff": 1.1,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Энергорешения Казахстан» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "Chanel TOO Аль-Фараби 120/55",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ЦЕТА Солюшнс ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Kapika» ТОО",
+    "coeff": 0.9,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "KOTON Textile («КОТОН Текстиль») ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "RTC ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО \"JUZ40 ONLINE\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "Technodom Operator (Технодом Оператор) АО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО \"INVICTUS GO 54\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "BORZHANDI 49 ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "\"Кайлас Строй ЛТД\"ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "ТОО «Скиф Трейд»,",
+    "coeff": 1.1,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "“Эйч энд Эм Хеннес энд Мауриц Казахстан” ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "Компания по Страхованию Жизни \"Европейская Страховая Компания\" АО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "HomeITTech ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО \"RAS Group Project\"",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "GO ABAY ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "ТОО \"Sport Center\"",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "ТОО «ТБН»",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "Almaly Fitnes",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "HOME MART ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО «Евразия Строй LLP (ЛЛП)»,",
+    "coeff": 0.9,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "Yiwumart ТОО",
+    "coeff": 0.9,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«TOIMART» ТОО",
+    "coeff": 1.1,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«БРИТИШ АМЕРИКАН ТОБАККО КАЗАХСТАН ТРЕЙДИНГ» ТОО",
+    "coeff": 0.9,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«Филип Моррис Казахстан» ТОО",
+    "coeff": 0.9,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "«TG Management» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "dk Vertrieb ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "\"Aitas KZ\" AO",
+    "coeff": 0.9,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "«Джей Ти Ай Казахстан» ТОО",
+    "coeff": 1.1,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "BI BUSINESS SOLUTION ТОО",
+    "coeff": 1.1,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«ХИЛТИ КАЗАХСТАН» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«KAZMILK (КАЗМИЛК)» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Лейла Имирова",
+    "company": "EAST LAND ТОО",
+    "coeff": 1.1,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Ханиуэлл Автоматическая система управления» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "Ingredient Kazahstan (Ингредиент Казахстан) ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "«Лукойл Лубрикантс Центральная Азия» ТОО",
+    "coeff": 1.1,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«ДХЛ Интернешнл Казахстан» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«Alkor Kazakhstan Ltd.» ЧК",
+    "coeff": 0.9,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "Easy Link Kazakhstan ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«Magnum Cash&Carry» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«ТВОЕ-КАЗАХСТАН» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«ЮНИСТАФФ» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Сентрас Секьюритиз» АО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "АО «КСЖ «Centras Life».",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«ГСК КХ Казахстан» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Астеллас Фарма» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Starget» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Starget Auto» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "SAT PROPERTY MANAGEMENT Ltd",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО «Семей Бизнес Сервис»",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Centras Brands» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "12 Месяцев ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Арайлым Ташенова",
+    "company": "«Qarasu construct» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "TorgStore ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Сан Фармасьютикал Индастриез Лимитед» ПК",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Беспрозванных Е.В.» ИП",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "Golden Movie ТОО молл Апорт, кинотеатр",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«Марш (страховые брокеры)» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«AP Property Management» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Мэри Кэй (Казахстан)» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«РестоМаркет.kz» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«Казахский Республиканский Торговый Дом «ЗАНГАР» ТОО",
+    "coeff": 0.9,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«СВС BOSCH Service» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«АзияБьютиКо» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«TSUM Advertising» ТОО",
+    "coeff": 0.9,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«ORDA» Индивидуальный предприниматель Авиль Абиль Мухаммадоглы",
+    "coeff": 0.9,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "«Школа Нового Поколения NGS (Энд Джи Эс)» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "«Yurvel» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«GUCLU ASTANA (ГЮЧЛЮ АСТАНА)» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«НЬЮ ЙОРКЕР Ритейл КАЗ» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "«MARVEL KAZAKSTAN» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "Агора Групп ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Лейла Имирова",
+    "company": "«Agro Land Co» ТОО",
+    "coeff": 1.1,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Arsuf (Арсуф)» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Amalfi (Амальфи)» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Лейла Имирова",
+    "company": "«СПОРТТЫК МУРА» ТОО",
+    "coeff": 1.1,
+    "status": null
+  },
+  {
+    "responsible": "Алина Сидорова",
+    "company": "«Клуб Т» ТОО",
+    "coeff": 1.0,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Farm Frites Eurasia» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«AZM Trade» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Султангазиева А.А.» ИП",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "«British Council (Kazakhstan)» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "«Olgar (Олгар)» ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "ТОО «Apple Bee»",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Карина Селивёрстова",
+    "company": "\"Pros Retail KZ\" (Прос Ритейл КЗ) ТОО",
+    "coeff": 0.8,
+    "status": null
+  },
+  {
+    "responsible": "Анара Закирова",
+    "company": "Мерген-Беркут ТОО",
+    "coeff": 0.8,
+    "status": null
+  }
+]

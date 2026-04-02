@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/bootstrap",
+      "destination": "/api/index?__pathname=/api/bootstrap"
+    },
+    {
+      "source": "/api/bitrix/:path*",
+      "destination": "/api/index?__pathname=/api/bitrix/:path*"
+    },
+    {
+      "source": "/api/clockster/:path*",
+      "destination": "/api/index?__pathname=/api/clockster/:path*"
+    }
+  ]
+}

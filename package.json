@@ -1,0 +1,11 @@
+{
+  "name": "kvadrat-mechty-dashboard",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "pg": "^8.20.0"
+  }
+}
