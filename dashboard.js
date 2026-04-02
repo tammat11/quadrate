@@ -56,6 +56,21 @@ const FOT_DB_PARTNER_OVERRIDES = {
 };
 const HOURS_BASED_DISCIPLINE_PARTNERS = new Set(['3370865', '2362023']);
 const HOURS_BASED_DISCIPLINE_NAMES = new Set(['туймебеков б.', 'ли а.']);
+const MANUAL_DISCIPLINE_LIMITS = {
+    '2362011': { maxQ: 0.2, penaltyPercent: 80, label: 'Ильиных Татьяна' },
+    '2362009': { maxQ: 0.8, penaltyPercent: 20, label: 'Илиясов Р.' },
+    '3370865': { maxQ: 0.6, penaltyPercent: 40, label: 'Туймебеков Б.' }
+};
+const REMARKS_RELIEF_MAX = 0.35;
+const PARTNER_FINAL_SCORE_ADJUSTMENTS = {
+    '2362011': { multiplier: 0.92, label: 'Ильиных Татьяна', reason: 'ручное понижение' },
+    '2361999': { multiplier: 0.92, label: 'Бут Р.', reason: 'ручное понижение' },
+    '2361989': { multiplier: 1.04, label: 'Айткулова А.', reason: 'алматинская надбавка' },
+    '2362027': { multiplier: 1.04, label: 'Нысанбеков Е.', reason: 'алматинская надбавка' },
+    '2362021': { multiplier: 1.04, label: 'Куатова М.', reason: 'алматинская надбавка' },
+    '2362025': { multiplier: 1.04, label: 'Мусаева Р.', reason: 'алматинская надбавка' },
+    '2362003': { multiplier: 1.04, label: 'Роза Ерасылова', reason: 'алматинская надбавка' }
+};
 const CLOCKSTER_PARTNER_TO_USER = {
     '3421309': 566091,
     '2362011': 474121,
@@ -203,6 +218,7 @@ let remarkMetricsByPartner = {};
 let auditCountsByPartner = {};
 let accountCoeffStatsByPartner = {};
 let opuComplexityStatsByPartner = {};
+let remarksReliefBenchmark = null;
 let complexityBenchmarks = {
     objects: null,
     area: null,
@@ -1371,6 +1387,11 @@ function buildIndexes() {
     const selectedMonth = getSelectedMonth();
     const callsMonths = getCallsReportMonths(selectedMonth);
     remarkMetricsByPartner = buildRemarkMetrics(selectedMonth);
+    remarksReliefBenchmark = buildComplexityBenchmark(
+        Object.values(remarkMetricsByPartner)
+            .map(metric => Number(metric?.rowCount) || 0)
+            .filter(value => value > 0)
+    );
     auditCountsByPartner = buildAuditCounts(selectedMonth);
     buildOpuComplexityStats();
     buildAccountCoeffStats();
@@ -1526,7 +1547,9 @@ function getCallsQ(pid) {
 function getRemarksQ(pid) {
     const p = partnersData[pid];
     if (!p || p.remarkScores.length === 0) return 1.0;
-    return Math.max(0, Math.min(1, 1 - p.remarkScores.reduce((sum, penalty) => sum + penalty, 0)));
+    const totalPenalty = p.remarkScores.reduce((sum, penalty) => sum + penalty, 0);
+    const reliefFactor = getRemarksReliefFactor(pid);
+    return Math.max(0, Math.min(1, 1 - (totalPenalty / reliefFactor)));
 }
 
 function getRealizationQ(pid) {
@@ -1560,10 +1583,21 @@ function getTrainingQ(pid) {
     return Math.min(1, (total / count) / 10);
 }
 
-function getDisciplineQ(pid) {
+function getDisciplineBaseQ(pid) {
     const stats = disciplineStatsByPartner[String(pid)];
     if (!stats || stats.totalMeetings <= 0) return 1.0;
     return Math.max(0, 1 - (stats.absences / stats.totalMeetings));
+}
+
+function getDisciplineManualRule(pid) {
+    return MANUAL_DISCIPLINE_LIMITS[String(pid)] || null;
+}
+
+function getDisciplineQ(pid) {
+    const baseQ = getDisciplineBaseQ(pid);
+    const manualRule = getDisciplineManualRule(pid);
+    if (!manualRule) return baseQ;
+    return Math.min(baseQ, manualRule.maxQ);
 }
 
 function getAuditQ(pid) {
@@ -1642,6 +1676,8 @@ function getRemarksMetricDetail(pid) {
         return { format: 'percent', digits: 0, sub: 'нет данных', title: 'Нет замечаний в выбранном срезе' };
     }
 
+    const reliefFactor = getRemarksReliefFactor(pid);
+
     const notes = [];
     if (metric.skippedMissingRemarkDate) {
         notes.push(`без даты замечания: ${metric.skippedMissingRemarkDate}`);
@@ -1655,7 +1691,7 @@ function getRemarksMetricDetail(pid) {
         format: 'percent',
         digits: 0,
         sub: `${metric.totalLateDays}/${metric.rowCount}`,
-        title: `Дней просрочки: ${metric.totalLateDays}, замечаний: ${metric.rowCount}, штраф: ${formatMetricNumber(metric.totalPenalty, 2)}${missingNote}`
+        title: `Дней просрочки: ${metric.totalLateDays}, замечаний: ${metric.rowCount}, штраф: ${formatMetricNumber(metric.totalPenalty, 2)}, послабление за объем: x${formatMetricNumber(reliefFactor, 2)}${missingNote}`
     };
 }
 
@@ -1738,16 +1774,26 @@ function getTrainingMetricDetail(pid) {
 
 function getDisciplineMetricDetail(pid) {
     const stats = disciplineStatsByPartner[String(pid)];
+    const manualRule = getDisciplineManualRule(pid);
+    const manualNote = manualRule ? ` · ручной -${manualRule.penaltyPercent}%` : '';
+
     if (!stats || stats.totalMeetings <= 0) {
-        return { format: 'percent', digits: 0, sub: 'нет данных', title: 'Нет планерок дисциплины за выбранный период' };
+        return {
+            format: 'percent',
+            digits: 0,
+            sub: manualRule ? `ручной -${manualRule.penaltyPercent}%` : 'нет данных',
+            title: manualRule
+                ? `Ручное ограничение дисциплины для ${manualRule.label}: максимум ${formatPercent(manualRule.maxQ)}`
+                : 'Нет планерок дисциплины за выбранный период'
+        };
     }
 
     const present = Math.max(0, stats.totalMeetings - stats.absences);
     return {
         format: 'percent',
         digits: 0,
-        sub: `${formatMetricNumber(present, 0)}/${formatMetricNumber(stats.totalMeetings, 0)}`,
-        title: `Присутствий: ${formatMetricNumber(present, 0)} из ${formatMetricNumber(stats.totalMeetings, 0)}, пропусков: ${formatMetricNumber(stats.absences, 0)}`
+        sub: `${formatMetricNumber(present, 0)}/${formatMetricNumber(stats.totalMeetings, 0)}${manualNote}`,
+        title: `Присутствий: ${formatMetricNumber(present, 0)} из ${formatMetricNumber(stats.totalMeetings, 0)}, пропусков: ${formatMetricNumber(stats.absences, 0)}${manualRule ? `; ручной потолок: ${formatPercent(manualRule.maxQ)}` : ''}`
     };
 }
 
@@ -1893,6 +1939,7 @@ function buildExampleMetricMarkup(label, value, lines = []) {
 function formatExampleCalculation(row) {
     const q = row.q;
     const details = row.details || {};
+    const manualAdjustment = row.manualAdjustment || null;
     const complexityParts = row.complexityParts || {
         objectsCoeff: 1,
         areaCoeff: 1,
@@ -1920,6 +1967,7 @@ function formatExampleCalculation(row) {
                 ]),
                 buildExampleMetricMarkup('Замечания', getExampleMetricValue(details.remarks, q.remarks), [
                     `Дни просрочки / замечания: ${details.remarks?.sub || 'нет данных'}`,
+                    `Послабление объёма: x${formatMetricNumber(getRemarksReliefFactor(row.bitrixPartnerId), 2)}`,
                     `Вклад: ${(remarksCriteria.weight * q.remarks * remarksCriteria.influence).toFixed(1)} бал.`
                 ]),
                 buildExampleMetricMarkup('Аудит качества', `${formatMetricNumber(q.audit, 0)} сделок`, [
@@ -2013,11 +2061,15 @@ function formatExampleCalculation(row) {
                 <div class="example-calc-total-label">Минус аудит</div>
                 <div class="example-calc-total-value">-${escapeHtml((row.auditPenaltyScore || 0).toFixed(2))} бал.</div>
             </div>
+            <div class="example-calc-total-item">
+                <div class="example-calc-total-label">Ручная поправка</div>
+                <div class="example-calc-total-value">${escapeHtml(manualAdjustment ? `${manualAdjustment.multiplier > 1 ? '+' : ''}${formatMetricNumber((manualAdjustment.multiplier - 1) * 100, 0)}%` : '0%')}</div>
+            </div>
         </div>
         <div class="example-calc-total-meta">
             Объекты: ${escapeHtml(formatMetricNumber(row.dealsCount || 0, 0))} · площадь: ${escapeHtml((row.totalArea || 0).toFixed(1))} м²<br>
             Аккаунт: ${escapeHtml(`${accountCoeffStats?.matchedDeals || 0}/${accountCoeffStats?.totalDeals || 0}`)} · нейтрально: ${escapeHtml(formatMetricNumber(accountCoeffStats?.unmatchedDeals || 0, 0))}<br>
-            Промежуточный итог: ${escapeHtml((row.preAuditTotalScore || 0).toFixed(2))} бал.
+            Промежуточный итог: ${escapeHtml((row.preAuditTotalScore || 0).toFixed(2))} бал.${manualAdjustment ? `<br>Ручная поправка: ${escapeHtml(manualAdjustment.reason)} (${manualAdjustment.multiplier > 1 ? '+' : ''}${escapeHtml(formatMetricNumber((manualAdjustment.multiplier - 1) * 100, 0))}%)` : ''}
         </div>
         <div class="example-calc-final">
             <div class="example-calc-final-label">Финальный итог</div>
@@ -2147,6 +2199,24 @@ function buildComplexityBenchmark(values) {
     };
 }
 
+function getRemarksReliefFactor(pid) {
+    const metric = remarkMetricsByPartner[String(pid)];
+    const rowCount = Number(metric?.rowCount) || 0;
+    const benchmark = remarksReliefBenchmark;
+    const p50 = Number(benchmark?.p50) || 0;
+    const p90 = Number(benchmark?.p90) || 0;
+
+    if (rowCount <= 0 || p90 <= p50 || rowCount <= p50) return 1.0;
+    if (rowCount >= p90) return 1 + REMARKS_RELIEF_MAX;
+
+    const ratio = (rowCount - p50) / (p90 - p50);
+    return 1 + (Math.max(0, Math.min(1, ratio)) * REMARKS_RELIEF_MAX);
+}
+
+function getPartnerFinalScoreAdjustment(pid) {
+    return PARTNER_FINAL_SCORE_ADJUSTMENTS[String(pid)] || null;
+}
+
 function buildComplexityBenchmarks() {
     const rows = Object.entries(partnersData)
         .map(([pid, partner]) => ({
@@ -2228,6 +2298,7 @@ function buildComplexityTooltip(row) {
     const opuBench = complexityBenchmarks.opu || {};
     const accountStats = accountCoeffStatsByPartner[String(row?.bitrixPartnerId)] || {};
     const opuStats = opuComplexityStatsByPartner[String(row?.bitrixPartnerId)] || null;
+    const manualAdjustment = getPartnerFinalScoreAdjustment(row?.bitrixPartnerId);
 
     const lines = [
         `Общий коэф.: ${(row?.complexityCoeff || 1).toFixed(3)}`,
@@ -2249,6 +2320,10 @@ function buildComplexityTooltip(row) {
         `Совпало сделок: ${accountStats.matchedDeals || 0}/${accountStats.totalDeals || 0}`,
         `Не найдено: ${accountStats.unmatchedDeals || 0}`
     ];
+
+    if (manualAdjustment) {
+        lines.push('', `Ручная поправка: ${manualAdjustment.reason}`, `Множитель: ${manualAdjustment.multiplier.toFixed(2)}`);
+    }
 
     return lines.join('\n').replace(/"/g, '&quot;');
 }
@@ -2303,7 +2378,9 @@ function buildMatrixRows() {
         const complexityCoeff = complexityParts.total;
         const preAuditTotalScore = rawTotal * complexityCoeff;
         const auditPenaltyScore = q.audit * AUDIT_NEGATIVE_DEAL_PENALTY;
-        const matrixTotalScore = Math.round((preAuditTotalScore - auditPenaltyScore) * 100) / 100;
+        const manualAdjustment = getPartnerFinalScoreAdjustment(pid);
+        const adjustedTotalScore = (preAuditTotalScore - auditPenaltyScore) * (manualAdjustment?.multiplier || 1);
+        const matrixTotalScore = Math.round(adjustedTotalScore * 100) / 100;
         const avgScore = data.dealsCount ? data.totalScore / data.dealsCount : 0;
 
         matrixRows.push({
@@ -2313,7 +2390,7 @@ function buildMatrixRows() {
             dealsCount: data.dealsCount || 0,
             totalArea: data.totalArea || 0,
             relationsScore, moneyScore, operationsScore,
-            rawTotal, complexityCoeff, complexityParts, preAuditTotalScore, auditPenaltyScore, matrixTotalScore,
+            rawTotal, complexityCoeff, complexityParts, preAuditTotalScore, auditPenaltyScore, matrixTotalScore, manualAdjustment,
             partnerLevel: matrixTotalScore >= 80 ? 'A' : matrixTotalScore >= 50 ? 'B' : 'C',
             statusZone: avgScore > 0.8 ? 'green' : avgScore > 0.5 ? 'yellow' : 'red',
             statusLabel: avgScore > 0.8 ? 'Excellent' : avgScore > 0.5 ? 'Good' : 'Needs Review',
@@ -2365,7 +2442,7 @@ function renderUI() {
         tr.className = 'partner-row';
         const qk = row.q;
         const dk = row.details || {};
-        const tooltip = `Сделок: ${row.dealsCount}\nПлощадь: ${(row.totalArea || 0).toFixed(1)} м²\nЗамечаний: ${row.remarksCount}\nДней просрочки: ${row.remarksLateDaysTotal || 0}\nБез даты замечания: ${row.remarkMissingDateCount || 0}\nБез обратной связи: ${row.remarkMissingFeedbackCount || 0}\nУровень: ${row.partnerLevel}\nID: ${row.bitrixPartnerId}`;
+        const tooltip = `Сделок: ${row.dealsCount}\nПлощадь: ${(row.totalArea || 0).toFixed(1)} м²\nЗамечаний: ${row.remarksCount}\nДней просрочки: ${row.remarksLateDaysTotal || 0}\nПослабление по замечаниям: x${formatMetricNumber(getRemarksReliefFactor(row.bitrixPartnerId), 2)}\nБез даты замечания: ${row.remarkMissingDateCount || 0}\nБез обратной связи: ${row.remarkMissingFeedbackCount || 0}${row.manualAdjustment ? `\nРучная поправка: ${row.manualAdjustment.reason} (${row.manualAdjustment.multiplier > 1 ? '+' : ''}${formatMetricNumber((row.manualAdjustment.multiplier - 1) * 100, 0)}%)` : ''}\nУровень: ${row.partnerLevel}\nID: ${row.bitrixPartnerId}`;
         const complexityTooltip = buildComplexityTooltip(row);
 
         const cells = visibleColumns.map((column, index) => {
@@ -2653,6 +2730,7 @@ function resetTestState() {
     auditCountsByPartner = {};
     accountCoeffStatsByPartner = {};
     opuComplexityStatsByPartner = {};
+    remarksReliefBenchmark = null;
     complexityBenchmarks = {
         objects: null,
         area: null,

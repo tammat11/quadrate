@@ -167,6 +167,25 @@ test('buildIndexes считает дисциплины и берет после�
     assert.equal(dashboard.getUpravlenkaQ('p2'), 0.5);
 });
 
+test('discipline ручные ограничения режут итоговый Q для конкретных партнеров', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            '2362011': 'Ильиных Татьяна',
+            '2362009': 'Илиясов Р.',
+            '3370865': 'Туймебеков Б.'
+        },
+        disciplineItems: [
+            { UF_CRM_173_NOPARTNER: ['3370865'] }
+        ]
+    });
+
+    dashboard.buildIndexes();
+
+    assert.equal(dashboard.getDisciplineQ('2362011'), 0.2);
+    assert.equal(dashboard.getDisciplineQ('2362009'), 0.8);
+    assert.equal(dashboard.getDisciplineQ('3370865'), 0);
+});
+
 test('getRemarksQ считает накопительный штраф как 1 минус сумма просрочек', () => {
     dashboard.applyTestState({
         partnerMap: {
@@ -195,6 +214,46 @@ test('getRemarksQ считает накопительный штраф как 1 
     dashboard.processData();
 
     assert.ok(Math.abs(dashboard.getRemarksQ('p1') - 0.05) < 1e-12);
+});
+
+test('getRemarksQ смягчает штраф, если замечаний у партнера очень много', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1',
+            p2: 'Партнер 2',
+            p3: 'Партнер 3'
+        },
+        deals69: [
+            { UF_CRM_1743669674: 'p1' },
+            { UF_CRM_1743669674: 'p2' },
+            { UF_CRM_1743669674: 'p3' }
+        ],
+        remarkDeals: [
+            ...Array.from({ length: 10 }, () => ({
+                UF_CRM_1743669674: 'p1',
+                DATE_CREATE: '2026-03-10',
+                UF_CRM_REVIEWDATE: '2026-03-01',
+                UF_CRM_FITBACK: '2026-03-04'
+            })),
+            ...Array.from({ length: 5 }, () => ({
+                UF_CRM_1743669674: 'p2',
+                DATE_CREATE: '2026-03-10',
+                UF_CRM_REVIEWDATE: '2026-03-01',
+                UF_CRM_FITBACK: '2026-03-04'
+            })),
+            {
+                UF_CRM_1743669674: 'p3',
+                DATE_CREATE: '2026-03-10',
+                UF_CRM_REVIEWDATE: '2026-03-01',
+                UF_CRM_FITBACK: '2026-03-04'
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+
+    assert.ok(dashboard.getRemarksQ('p1') > 0.5);
 });
 
 test('getRemarksQ не уходит в минус и зажимается в диапазон 0..1', () => {
@@ -554,6 +613,26 @@ test('audit штрафует итог на 1 балл за каждую отри
     assert.ok(row);
     assert.equal(row.auditPenaltyScore, 2);
     assert.equal(row.matrixTotalScore, Math.round((row.preAuditTotalScore - 2) * 100) / 100);
+});
+
+test('ручная поправка по партнеру применяется к финальному итогу', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            '2362011': 'Ильиных Татьяна'
+        },
+        deals69: [
+            { ID: 'd1', UF_CRM_1743669674: '2362011', UF_CRM_1707724024179: '0' }
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === '2362011');
+    assert.ok(row);
+    assert.equal(row.manualAdjustment?.multiplier, 0.92);
+    assert.equal(row.matrixTotalScore, Math.round((row.preAuditTotalScore - row.auditPenaltyScore) * 0.92 * 100) / 100);
 });
 
 test('extractTrainingMonthKey уважает номер месяца и корректно переживает переход года', () => {
