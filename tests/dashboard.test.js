@@ -611,8 +611,8 @@ test('audit штрафует итог на 1 балл за каждую отри
 
     const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
     assert.ok(row);
-    assert.equal(row.auditPenaltyScore, 2);
-    assert.equal(row.matrixTotalScore, Math.round((row.preAuditTotalScore - 2) * 100) / 100);
+    assert.equal(row.auditPenaltyScore, 1);
+    assert.equal(row.matrixTotalScore, Math.round((row.preAuditTotalScore - 1) * 100) / 100);
 });
 
 test('ручная поправка по партнеру применяется к финальному итогу', () => {
@@ -633,6 +633,53 @@ test('ручная поправка по партнеру применяется
     assert.ok(row);
     assert.equal(row.manualAdjustment?.multiplier, 0.92);
     assert.equal(row.matrixTotalScore, Math.round((row.preAuditTotalScore - row.auditPenaltyScore) * 0.92 * 100) / 100);
+});
+
+test('итог считается от отображаемых суммы и коэффициента, а не от скрытых дробей', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1'
+        },
+        companyMap: {
+            c1: 'Kaspi bank AO'
+        },
+        lastUserMap: {
+            u1: 'Арайлым Ташенова'
+        },
+        accountCoefficientRows: [
+            { responsible: 'Арайлым Ташенова', company: 'Kaspi bank AO', coeff: 0.9876509, status: null }
+        ],
+        deals69: [
+            { ID: 'd1', COMPANY_ID: 'c1', ASSIGNED_BY_ID: 'u1', UF_CRM_1743669674: 'p1', UF_CRM_1707724024179: '100' }
+        ],
+        callsItems: [
+            {
+                UF_CRM_173_PARTNER: 'p1',
+                UF_CRM_173_1771396927: '3',
+                UF_CRM_173_1771397355616: 'Да',
+                UF_CRM_173_1771397383665: 'Да',
+                UF_CRM_173_1771398284442: 'Да',
+                UF_CRM_173_1771398356499: '3'
+            }
+        ],
+        clocksterMetricsByPartner: {
+            p1: { visits: 1, hours: 1, uniqueObjects: 1 }
+        }
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
+    assert.ok(row);
+
+    const shownRawTotal = Math.round(row.rawTotal * 10) / 10;
+    const shownCoeff = Math.round(row.complexityCoeff * 100) / 100;
+    const expectedTotal = Math.round((shownRawTotal * shownCoeff) * 100) / 100;
+
+    assert.equal(shownCoeff.toFixed(2), '1.00');
+    assert.equal(row.matrixTotalScore, expectedTotal);
 });
 
 test('extractTrainingMonthKey уважает номер месяца и корректно переживает переход года', () => {

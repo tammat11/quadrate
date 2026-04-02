@@ -137,7 +137,7 @@ const REPORTING_MONTH_END = '2027-03';
 const SUMMARY_FILTER_VALUE = 'summary';
 const AUDIT_REMARK_SOURCE_IDS = new Set(['43609']);
 const AUDIT_REMARK_SOURCE_LABELS = new Set(['от аудитора замечание', 'от аудитора замечания']);
-const AUDIT_NEGATIVE_DEAL_PENALTY = 1;
+const AUDIT_NEGATIVE_DEAL_PENALTY = 0.5;
 
 const MATRIX = {
     relations: [
@@ -1629,6 +1629,13 @@ function formatMetricNumber(value, digits = 2) {
     return Number(value).toFixed(digits).replace(/\.00$/, '');
 }
 
+function roundTo(value, digits = 2) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    const factor = 10 ** digits;
+    return Math.round(numeric * factor) / factor;
+}
+
 function formatPercent(value, digits = 0) {
     if (!Number.isFinite(value)) return '0%';
     return `${(Number(value) * 100).toFixed(digits).replace(/\.00$/, '')}%`;
@@ -1775,15 +1782,14 @@ function getTrainingMetricDetail(pid) {
 function getDisciplineMetricDetail(pid) {
     const stats = disciplineStatsByPartner[String(pid)];
     const manualRule = getDisciplineManualRule(pid);
-    const manualNote = manualRule ? ` · ручной -${manualRule.penaltyPercent}%` : '';
 
     if (!stats || stats.totalMeetings <= 0) {
         return {
             format: 'percent',
             digits: 0,
-            sub: manualRule ? `ручной -${manualRule.penaltyPercent}%` : 'нет данных',
+            sub: '',
             title: manualRule
-                ? `Ручное ограничение дисциплины для ${manualRule.label}: максимум ${formatPercent(manualRule.maxQ)}`
+                ? `Ограничение по дисциплине для ${manualRule.label}: максимум ${formatPercent(manualRule.maxQ)}`
                 : 'Нет планерок дисциплины за выбранный период'
         };
     }
@@ -1792,8 +1798,8 @@ function getDisciplineMetricDetail(pid) {
     return {
         format: 'percent',
         digits: 0,
-        sub: `${formatMetricNumber(present, 0)}/${formatMetricNumber(stats.totalMeetings, 0)}${manualNote}`,
-        title: `Присутствий: ${formatMetricNumber(present, 0)} из ${formatMetricNumber(stats.totalMeetings, 0)}, пропусков: ${formatMetricNumber(stats.absences, 0)}${manualRule ? `; ручной потолок: ${formatPercent(manualRule.maxQ)}` : ''}`
+        sub: manualRule ? '' : `${formatMetricNumber(present, 0)}/${formatMetricNumber(stats.totalMeetings, 0)}`,
+        title: `Присутствий: ${formatMetricNumber(present, 0)} из ${formatMetricNumber(stats.totalMeetings, 0)}, пропусков: ${formatMetricNumber(stats.absences, 0)}${manualRule ? `; лимит по дисциплине: ${formatPercent(manualRule.maxQ)}` : ''}`
     };
 }
 
@@ -1939,7 +1945,6 @@ function buildExampleMetricMarkup(label, value, lines = []) {
 function formatExampleCalculation(row) {
     const q = row.q;
     const details = row.details || {};
-    const manualAdjustment = row.manualAdjustment || null;
     const complexityParts = row.complexityParts || {
         objectsCoeff: 1,
         areaCoeff: 1,
@@ -2000,7 +2005,7 @@ function formatExampleCalculation(row) {
                     `Вклад: ${(trainingCriteria.weight * q.training * trainingCriteria.influence).toFixed(1)} бал.`
                 ]),
                 buildExampleMetricMarkup('Дисциплины', getExampleMetricValue(details.discipline, q.discipline), [
-                    `Планерки: ${details.discipline?.sub || 'нет данных'}`,
+                    ...(details.discipline?.sub ? [`Планерки: ${details.discipline.sub}`] : []),
                     `Вклад: ${(disciplineCriteria.weight * q.discipline * disciplineCriteria.influence).toFixed(1)} бал.`
                 ]),
                 buildExampleMetricMarkup('УМС/РМ', getExampleMetricValue(details.umsrm, q.umsrm), [
@@ -2061,15 +2066,11 @@ function formatExampleCalculation(row) {
                 <div class="example-calc-total-label">Минус аудит</div>
                 <div class="example-calc-total-value">-${escapeHtml((row.auditPenaltyScore || 0).toFixed(2))} бал.</div>
             </div>
-            <div class="example-calc-total-item">
-                <div class="example-calc-total-label">Ручная поправка</div>
-                <div class="example-calc-total-value">${escapeHtml(manualAdjustment ? `${manualAdjustment.multiplier > 1 ? '+' : ''}${formatMetricNumber((manualAdjustment.multiplier - 1) * 100, 0)}%` : '0%')}</div>
-            </div>
         </div>
         <div class="example-calc-total-meta">
             Объекты: ${escapeHtml(formatMetricNumber(row.dealsCount || 0, 0))} · площадь: ${escapeHtml((row.totalArea || 0).toFixed(1))} м²<br>
             Аккаунт: ${escapeHtml(`${accountCoeffStats?.matchedDeals || 0}/${accountCoeffStats?.totalDeals || 0}`)} · нейтрально: ${escapeHtml(formatMetricNumber(accountCoeffStats?.unmatchedDeals || 0, 0))}<br>
-            Промежуточный итог: ${escapeHtml((row.preAuditTotalScore || 0).toFixed(2))} бал.${manualAdjustment ? `<br>Ручная поправка: ${escapeHtml(manualAdjustment.reason)} (${manualAdjustment.multiplier > 1 ? '+' : ''}${escapeHtml(formatMetricNumber((manualAdjustment.multiplier - 1) * 100, 0))}%)` : ''}
+            Промежуточный итог: ${escapeHtml((row.preAuditTotalScore || 0).toFixed(2))} бал.
         </div>
         <div class="example-calc-final">
             <div class="example-calc-final-label">Финальный итог</div>
@@ -2376,11 +2377,14 @@ function buildMatrixRows() {
         const rawTotal = relationsScore + moneyScore + operationsScore;
         const complexityParts = getComplexityParts(pid);
         const complexityCoeff = complexityParts.total;
-        const preAuditTotalScore = rawTotal * complexityCoeff;
+        const displayedRawTotal = roundTo(rawTotal, 1);
+        const displayedComplexityCoeff = roundTo(complexityCoeff, 2);
+        const preAuditTotalScore = displayedRawTotal * displayedComplexityCoeff;
         const auditPenaltyScore = q.audit * AUDIT_NEGATIVE_DEAL_PENALTY;
         const manualAdjustment = getPartnerFinalScoreAdjustment(pid);
-        const adjustedTotalScore = (preAuditTotalScore - auditPenaltyScore) * (manualAdjustment?.multiplier || 1);
-        const matrixTotalScore = Math.round(adjustedTotalScore * 100) / 100;
+        const displayedManualMultiplier = roundTo(manualAdjustment?.multiplier || 1, 2);
+        const adjustedTotalScore = (preAuditTotalScore - auditPenaltyScore) * displayedManualMultiplier;
+        const matrixTotalScore = roundTo(adjustedTotalScore, 2);
         const avgScore = data.dealsCount ? data.totalScore / data.dealsCount : 0;
 
         matrixRows.push({
@@ -2437,7 +2441,7 @@ function renderUI() {
     const matrixBody = document.getElementById('matrixBody');
     matrixBody.innerHTML = '';
     const visibleColumns = getVisibleMatrixColumns();
-    for (const row of matrixRows) {
+    for (const [rowIndex, row] of matrixRows.entries()) {
         const tr = document.createElement('tr');
         tr.className = 'partner-row';
         const qk = row.q;
@@ -2450,7 +2454,7 @@ function renderUI() {
             const classAttr = className ? ` class="${className}${column.type === 'partner' ? ' partner-name-cell' : ''}"` : (column.type === 'partner' ? ' class="partner-name-cell"' : '');
             switch (column.type) {
                 case 'partner':
-                    return `<td${classAttr} title="${tooltip}">${row.name}</td>`;
+                    return `<td${classAttr} title="${tooltip}"><div class="partner-rank-cell"><span class="partner-rank-index">${rowIndex + 1}</span><span class="partner-rank-name">${escapeHtml(row.name)}</span></div></td>`;
                 case 'group-summary':
                     return renderSummaryCell(row[column.scoreField], {
                         sub: column.sub,
