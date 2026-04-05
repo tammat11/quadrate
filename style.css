@@ -38,15 +38,15 @@ body {
 .dashboard-container {
     max-width: 1720px;
     margin: 0 auto;
-    padding: 2.2rem 1.6rem 3rem;
+    padding: 2.6rem 1.6rem 3.2rem;
 }
 
 header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1.9rem;
-    padding-bottom: 1rem;
+    margin-bottom: 2.35rem;
+    padding-bottom: 1.2rem;
     border-bottom: 1px solid var(--line-soft);
 }
 
@@ -57,7 +57,7 @@ header {
 }
 
 .logo-section h1 {
-    font-size: 2.2rem;
+    font-size: 2.45rem;
     font-weight: 800;
     color: var(--text-main);
     letter-spacing: -0.05em;
@@ -119,18 +119,22 @@ button {
 .stats-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 0.85rem;
-    margin-bottom: 1rem;
+    gap: 1rem;
+    margin-bottom: 1.35rem;
 }
 
 .stat-card {
     background: var(--surface);
     border: 1px solid var(--glass-border);
-    padding: 1.2rem 1.25rem;
+    padding: 1.55rem 1.4rem;
     border-radius: 16px;
     position: relative;
     overflow: hidden;
     box-shadow: var(--shadow-soft);
+    min-height: 152px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
 }
 
 .stat-card::before {
@@ -146,19 +150,19 @@ button {
     font-size: 0.68rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    margin-bottom: 0.7rem;
+    margin-bottom: 0.9rem;
 }
 
 .stat-value {
-    font-size: 2.15rem;
+    font-size: 2.35rem;
     font-weight: 800;
     letter-spacing: -0.05em;
-    margin-bottom: 0.28rem;
+    margin-bottom: 0.4rem;
     font-variant-numeric: tabular-nums;
 }
 
 .stat-trend {
-    font-size: 0.76rem;
+    font-size: 0.8rem;
     display: flex;
     align-items: center;
     gap: 0.4rem;
