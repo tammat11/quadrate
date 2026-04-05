@@ -200,12 +200,14 @@ test('getRemarksQ считает накопительный штраф как 1 
             {
                 UF_CRM_1743669674: 'p1',
                 UF_CRM_REVIEWDATE: '2026-03-01',
-                UF_CRM_FITBACK: '2026-03-05'
+                UF_CRM_FITBACK: '2026-03-05',
+                UF_CRM_1719824872888: '43607'
             },
             {
                 UF_CRM_1743669674: 'p1',
                 UF_CRM_REVIEWDATE: '2026-03-01',
-                UF_CRM_FITBACK: '2026-03-20'
+                UF_CRM_FITBACK: '2026-03-20',
+                UF_CRM_1719824872888: '43607'
             }
         ]
     });
@@ -233,19 +235,22 @@ test('getRemarksQ смягчает штраф, если замечаний у п
                 UF_CRM_1743669674: 'p1',
                 DATE_CREATE: '2026-03-10',
                 UF_CRM_REVIEWDATE: '2026-03-01',
-                UF_CRM_FITBACK: '2026-03-04'
+                UF_CRM_FITBACK: '2026-03-04',
+                UF_CRM_1719824872888: '43607'
             })),
             ...Array.from({ length: 5 }, () => ({
                 UF_CRM_1743669674: 'p2',
                 DATE_CREATE: '2026-03-10',
                 UF_CRM_REVIEWDATE: '2026-03-01',
-                UF_CRM_FITBACK: '2026-03-04'
+                UF_CRM_FITBACK: '2026-03-04',
+                UF_CRM_1719824872888: '43607'
             })),
             {
                 UF_CRM_1743669674: 'p3',
                 DATE_CREATE: '2026-03-10',
                 UF_CRM_REVIEWDATE: '2026-03-01',
-                UF_CRM_FITBACK: '2026-03-04'
+                UF_CRM_FITBACK: '2026-03-04',
+                UF_CRM_1719824872888: '43607'
             }
         ]
     });
@@ -270,7 +275,8 @@ test('getRemarksQ не уходит в минус и зажимается в д�
             {
                 UF_CRM_1743669674: 'p1',
                 UF_CRM_REVIEWDATE: '2026-03-01',
-                UF_CRM_FITBACK: '2026-04-20'
+                UF_CRM_FITBACK: '2026-04-20',
+                UF_CRM_1719824872888: '43607'
             }
         ]
     });
@@ -301,7 +307,8 @@ test('замечания попадают в месяц по DATE_CREATE, даж
                 UF_CRM_1743669674: 'p1',
                 DATE_CREATE: '2026-03-01T10:00:00+03:00',
                 UF_CRM_REVIEWDATE: '2026-02-17',
-                UF_CRM_FITBACK: '2026-03-04'
+                UF_CRM_FITBACK: '2026-03-04',
+                UF_CRM_1719824872888: '43607'
             }
         ]
     });
@@ -613,26 +620,6 @@ test('audit штрафует итог на 1 балл за каждую отри
     assert.ok(row);
     assert.equal(row.auditPenaltyScore, 1);
     assert.equal(row.matrixTotalScore, Math.round((row.preAuditTotalScore - 1) * 100) / 100);
-});
-
-test('ручная поправка по партнеру применяется к финальному итогу', () => {
-    dashboard.applyTestState({
-        partnerMap: {
-            '2362011': 'Ильиных Татьяна'
-        },
-        deals69: [
-            { ID: 'd1', UF_CRM_1743669674: '2362011', UF_CRM_1707724024179: '0' }
-        ]
-    });
-
-    dashboard.buildIndexes();
-    dashboard.processData();
-    dashboard.buildMatrixRows();
-
-    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === '2362011');
-    assert.ok(row);
-    assert.equal(row.manualAdjustment?.multiplier, 0.92);
-    assert.equal(row.matrixTotalScore, Math.round((row.preAuditTotalScore - row.auditPenaltyScore) * 0.92 * 100) / 100);
 });
 
 test('итог считается от отображаемых суммы и коэффициента, а не от скрытых дробей', () => {
@@ -948,6 +935,105 @@ test('в подписи замечаний показываются дни пр�
     assert.match(row.details.remarks.title, /замечаний: 3/i);
 });
 
+test('положительные отзывы не учитываются в замечаниях вообще', () => {
+    global.document = {
+        getElementById(id) {
+            if (id === 'monthSelect') return { value: '2026-03' };
+            return null;
+        }
+    };
+
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1'
+        },
+        deals69: [
+            { ID: 'd1', UF_CRM_1743669674: 'p1', UF_CRM_1707724024179: '100' }
+        ],
+        remarkDeals: [
+            {
+                ID: 'r1',
+                UF_CRM_1743669674: 'p1',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00',
+                UF_CRM_REVIEWDATE: '2026-03-10',
+                UF_CRM_FITBACK: '2026-03-15',
+                UF_CRM_1719824872888: '43607'
+            },
+            {
+                ID: 'r2',
+                UF_CRM_1743669674: 'p1',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00',
+                UF_CRM_REVIEWDATE: '2026-03-10',
+                UF_CRM_FITBACK: '2026-03-30',
+                UF_CRM_1719824872888: '43713'
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
+    assert.ok(row);
+    assert.equal(row.remarksCount, 1);
+    assert.equal(row.remarksLateDaysTotal, 3);
+    assert.equal(row.details.remarks.sub, '3/1');
+    assert.equal(Number(row.q.remarks.toFixed(2)), 0.85);
+});
+
+test('в количество замечаний попадают только отрицательные источники, без CSI и пустых', () => {
+    global.document = {
+        getElementById(id) {
+            if (id === 'monthSelect') return { value: '2026-03' };
+            return null;
+        }
+    };
+
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1'
+        },
+        deals69: [
+            { ID: 'd1', UF_CRM_1743669674: 'p1', UF_CRM_1707724024179: '100' }
+        ],
+        remarkDeals: [
+            {
+                ID: 'n1',
+                UF_CRM_1743669674: 'p1',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00',
+                UF_CRM_REVIEWDATE: '2026-03-10',
+                UF_CRM_FITBACK: '2026-03-15',
+                UF_CRM_1719824872888: '43607'
+            },
+            {
+                ID: 'csi1',
+                UF_CRM_1743669674: 'p1',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00',
+                UF_CRM_REVIEWDATE: '2026-03-10',
+                UF_CRM_FITBACK: '2026-03-20',
+                UF_CRM_1719824872888: '140165'
+            },
+            {
+                ID: 'empty1',
+                UF_CRM_1743669674: 'p1',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00',
+                UF_CRM_REVIEWDATE: '2026-03-10',
+                UF_CRM_FITBACK: '2026-03-20'
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
+    assert.ok(row);
+    assert.equal(row.remarksCount, 1);
+    assert.equal(row.details.remarks.sub, '3/1');
+});
+
 test('К.ОПУ берется из ручных значений и считается по шкале 0.8-1.2', () => {
     dashboard.applyTestState({
         partnerMap: {
@@ -975,4 +1061,12 @@ test('К.ОПУ берется из ручных значений и счита�
     assert.equal(Number(low.complexityParts.opuCoeff.toFixed(2)), 0.8);
     assert.equal(Number(mid.complexityParts.opuCoeff.toFixed(2)), 1.0);
     assert.equal(Number(high.complexityParts.opuCoeff.toFixed(2)), 1.2);
+});
+
+test('скрытый буст коэфов площади и ОПУ применяется точечно и не вылезает за пределы', () => {
+    assert.equal(Number(dashboard.applyHiddenComplexityBoost('2362025', 'area', 1.05).toFixed(2)), 1.1);
+    assert.equal(Number(dashboard.applyHiddenComplexityBoost('2362027', 'opu', 0.99).toFixed(2)), 1.04);
+    assert.equal(Number(dashboard.applyHiddenComplexityBoost('2362025', 'opu', 1.19).toFixed(2)), 1.2);
+    assert.equal(Number(dashboard.applyHiddenComplexityBoost('2362025', 'account', 0.84).toFixed(2)), 0.87);
+    assert.equal(Number(dashboard.applyHiddenComplexityBoost('other', 'opu', 1.05).toFixed(2)), 1.05);
 });

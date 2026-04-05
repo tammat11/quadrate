@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PartnerMatrixRow",
+  "description": "Одна строка матрицы партнёров в дашборде. Источник полей: Bitrix (deal/user) или расчёт (calculated).",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "description": "Уникальный ключ строки (bitrixPartnerId_periodKey)" },
+    "periodKey": { "type": "string", "description": "Ключ периода (месяц/квартал), напр. 2026-03" },
+    "bitrixPartnerId": { "type": "string", "description": "ID пользователя Bitrix (ASSIGNED_BY_ID)" },
+    "name": { "type": "string", "description": "ФИО из user.get" },
+    "region": { "type": ["string", "null"], "description": "Регион (user UF_* или deal)" },
+    "managerId": { "type": ["string", "null"] },
+    "managerName": { "type": ["string", "null"] },
+    "dealsCount": { "type": "number", "description": "Число сделок за период" },
+    "dealsInScopeCount": { "type": "number" },
+    "totalOpportunity": { "type": "number", "description": "Сумма deal.OPPORTUNITY" },
+    "currencyId": { "type": "string", "description": "deal.CURRENCY_ID" },
+    "avgFotScore": { "type": "number", "description": "Средний FOT score по сделкам" },
+    "avgRemarkScore": { "type": "number" },
+    "weightedScore": { "type": "number", "description": "Итоговый взвешенный балл (FOT)" },
+    "relationsScore": { "type": "number", "description": "Баллы блока Отношения с клиентом" },
+    "moneyScore": { "type": "number", "description": "Баллы блока Деньги" },
+    "operationsScore": { "type": "number", "description": "Баллы блока ОПУ" },
+    "complexityCoeff": { "type": "number", "description": "Коэффициент сложности (от аккаунта + площадь + ОПУ)/3" },
+    "matrixTotalScore": { "type": "number", "description": "Итог матрицы: (Отношения+Деньги+ОПУ)*complexityCoeff" },
+    "remarksCount": { "type": "number", "description": "Число сделок с замечаниями" },
+    "reactionDaysAvg": { "type": "number" },
+    "partnerLevel": { "type": "string", "description": "Уровень по правилам матрицы (A/B/C)" },
+    "statusLabel": { "type": "string", "description": "Текстовый статус (Excellent, Good, Needs Review)" },
+    "statusZone": { "type": "string", "enum": ["green", "yellow", "red"] },
+    "kpiScore": { "type": "number" },
+    "comment": { "type": ["string", "null"] },
+    "history": {
+      "type": "array",
+      "items": { "type": "object", "properties": { "date": { "type": "string" }, "score": { "type": "number" } } }
+    },
+    "dealIds": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["id", "periodKey", "bitrixPartnerId", "name", "dealsCount", "weightedScore", "statusZone"]
+}

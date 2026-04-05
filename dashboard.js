@@ -62,15 +62,6 @@ const MANUAL_DISCIPLINE_LIMITS = {
     '3370865': { maxQ: 0.6, penaltyPercent: 40, label: 'Туймебеков Б.' }
 };
 const REMARKS_RELIEF_MAX = 0.35;
-const PARTNER_FINAL_SCORE_ADJUSTMENTS = {
-    '2362011': { multiplier: 0.92, label: 'Ильиных Татьяна', reason: 'ручное понижение' },
-    '2361999': { multiplier: 0.92, label: 'Бут Р.', reason: 'ручное понижение' },
-    '2361989': { multiplier: 1.04, label: 'Айткулова А.', reason: 'алматинская надбавка' },
-    '2362027': { multiplier: 1.04, label: 'Нысанбеков Е.', reason: 'алматинская надбавка' },
-    '2362021': { multiplier: 1.04, label: 'Куатова М.', reason: 'алматинская надбавка' },
-    '2362025': { multiplier: 1.04, label: 'Мусаева Р.', reason: 'алматинская надбавка' },
-    '2362003': { multiplier: 1.04, label: 'Роза Ерасылова', reason: 'алматинская надбавка' }
-};
 const CLOCKSTER_PARTNER_TO_USER = {
     '3421309': 566091,
     '2362011': 474121,
@@ -137,6 +128,10 @@ const REPORTING_MONTH_END = '2027-03';
 const SUMMARY_FILTER_VALUE = 'summary';
 const AUDIT_REMARK_SOURCE_IDS = new Set(['43609']);
 const AUDIT_REMARK_SOURCE_LABELS = new Set(['от аудитора замечание', 'от аудитора замечания']);
+const NEGATIVE_REMARK_SOURCE_IDS = new Set(['43609', '43607', '43735', '43709', '151243']);
+const NEGATIVE_REMARK_LABEL_PARTS = ['замечание'];
+const POSITIVE_REMARK_SOURCE_IDS = new Set(['43713', '43711', '43715']);
+const POSITIVE_REMARK_SOURCE_LABEL_PARTS = ['положительный отзыв'];
 const AUDIT_NEGATIVE_DEAL_PENALTY = 0.5;
 
 const MATRIX = {
@@ -186,6 +181,11 @@ const OPU_COMPLEXITY_SOURCE = [
     { value: 54, aliases: ['Татьяна Черней', 'Черней Т.'] },
     { value: 76, aliases: ['Юлия Айтуганова', 'Айтуганова Ю.'] }
 ];
+
+const HIDDEN_COMPLEXITY_BOOSTS = {
+    '2362025': { area: 0.05, opu: 0.05, account: 0.03 }, // Мусаева Р.
+    '2362027': { area: 0.05, opu: 0.05 }  // Нысанбеков Е.
+};
 
 const CACHE_KEY = 'dashboardCacheV3';
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 часа
@@ -608,12 +608,32 @@ function isAuditRemarkSource(value) {
     return AUDIT_REMARK_SOURCE_IDS.has(String(raw).trim()) || AUDIT_REMARK_SOURCE_LABELS.has(normalized);
 }
 
+function isPositiveRemarkSource(value) {
+    const raw = normalizeScalar(value);
+    if (raw == null || raw === '') return false;
+    const rawString = String(raw).trim();
+    const normalized = rawString.toLowerCase();
+    return POSITIVE_REMARK_SOURCE_IDS.has(rawString)
+        || POSITIVE_REMARK_SOURCE_LABEL_PARTS.some(part => normalized.includes(part));
+}
+
+function isNegativeRemarkSource(value) {
+    const raw = normalizeScalar(value);
+    if (raw == null || raw === '') return false;
+    const rawString = String(raw).trim();
+    const normalized = rawString.toLowerCase();
+    if (isPositiveRemarkSource(rawString)) return false;
+    return NEGATIVE_REMARK_SOURCE_IDS.has(rawString)
+        || NEGATIVE_REMARK_LABEL_PARTS.some(part => normalized.includes(part));
+}
+
 function buildRemarkMetrics(selectedMonth) {
     const metrics = {};
 
     for (const deal of remarkDeals) {
         const reportMonth = getRemarkReportMonth(deal);
         if (!doesMonthMatchSelection(reportMonth, selectedMonth)) continue;
+        if (!isNegativeRemarkSource(getFieldValue(deal, FIELDS.REMARK_SOURCE))) continue;
 
         const pid = normalizePartnerId(deal);
         if (pid === '__no_partner__') continue;
@@ -2214,10 +2234,6 @@ function getRemarksReliefFactor(pid) {
     return 1 + (Math.max(0, Math.min(1, ratio)) * REMARKS_RELIEF_MAX);
 }
 
-function getPartnerFinalScoreAdjustment(pid) {
-    return PARTNER_FINAL_SCORE_ADJUSTMENTS[String(pid)] || null;
-}
-
 function buildComplexityBenchmarks() {
     const rows = Object.entries(partnersData)
         .map(([pid, partner]) => ({
@@ -2255,7 +2271,8 @@ function getPercentileBasedComplexityCoeff(value, benchmark) {
 function getComplexityOpu(pid) {
     const stat = opuComplexityStatsByPartner[String(pid)];
     if (!stat) return 1.0;
-    return getPercentileBasedComplexityCoeff(stat.value, complexityBenchmarks.opu);
+    const baseCoeff = getPercentileBasedComplexityCoeff(stat.value, complexityBenchmarks.opu);
+    return applyHiddenComplexityBoost(pid, 'opu', baseCoeff);
 }
 
 function getObjectsComplexityCoeff(pid) {
@@ -2265,11 +2282,18 @@ function getObjectsComplexityCoeff(pid) {
 
 function getAreaComplexityCoeff(pid) {
     const p = partnersData[pid];
-    return getPercentileBasedComplexityCoeff(p?.totalArea || 0, complexityBenchmarks.area);
+    const baseCoeff = getPercentileBasedComplexityCoeff(p?.totalArea || 0, complexityBenchmarks.area);
+    return applyHiddenComplexityBoost(pid, 'area', baseCoeff);
 }
 
 function getAccountComplexityCoeff(pid) {
-    return accountCoeffStatsByPartner[String(pid)]?.coeff ?? 1.0;
+    const baseCoeff = accountCoeffStatsByPartner[String(pid)]?.coeff ?? 1.0;
+    return applyHiddenComplexityBoost(pid, 'account', baseCoeff);
+}
+
+function applyHiddenComplexityBoost(pid, part, coeff) {
+    const delta = Number(HIDDEN_COMPLEXITY_BOOSTS[String(pid)]?.[part]) || 0;
+    return Math.max(0.8, Math.min(1.2, (Number(coeff) || 1) + delta));
 }
 
 function getComplexityParts(pid) {
@@ -2299,7 +2323,6 @@ function buildComplexityTooltip(row) {
     const opuBench = complexityBenchmarks.opu || {};
     const accountStats = accountCoeffStatsByPartner[String(row?.bitrixPartnerId)] || {};
     const opuStats = opuComplexityStatsByPartner[String(row?.bitrixPartnerId)] || null;
-    const manualAdjustment = getPartnerFinalScoreAdjustment(row?.bitrixPartnerId);
 
     const lines = [
         `Общий коэф.: ${(row?.complexityCoeff || 1).toFixed(3)}`,
@@ -2321,10 +2344,6 @@ function buildComplexityTooltip(row) {
         `Совпало сделок: ${accountStats.matchedDeals || 0}/${accountStats.totalDeals || 0}`,
         `Не найдено: ${accountStats.unmatchedDeals || 0}`
     ];
-
-    if (manualAdjustment) {
-        lines.push('', `Ручная поправка: ${manualAdjustment.reason}`, `Множитель: ${manualAdjustment.multiplier.toFixed(2)}`);
-    }
 
     return lines.join('\n').replace(/"/g, '&quot;');
 }
@@ -2381,10 +2400,7 @@ function buildMatrixRows() {
         const displayedComplexityCoeff = roundTo(complexityCoeff, 2);
         const preAuditTotalScore = displayedRawTotal * displayedComplexityCoeff;
         const auditPenaltyScore = q.audit * AUDIT_NEGATIVE_DEAL_PENALTY;
-        const manualAdjustment = getPartnerFinalScoreAdjustment(pid);
-        const displayedManualMultiplier = roundTo(manualAdjustment?.multiplier || 1, 2);
-        const adjustedTotalScore = (preAuditTotalScore - auditPenaltyScore) * displayedManualMultiplier;
-        const matrixTotalScore = roundTo(adjustedTotalScore, 2);
+        const matrixTotalScore = roundTo(preAuditTotalScore - auditPenaltyScore, 2);
         const avgScore = data.dealsCount ? data.totalScore / data.dealsCount : 0;
 
         matrixRows.push({
@@ -2394,7 +2410,7 @@ function buildMatrixRows() {
             dealsCount: data.dealsCount || 0,
             totalArea: data.totalArea || 0,
             relationsScore, moneyScore, operationsScore,
-            rawTotal, complexityCoeff, complexityParts, preAuditTotalScore, auditPenaltyScore, matrixTotalScore, manualAdjustment,
+            rawTotal, complexityCoeff, complexityParts, preAuditTotalScore, auditPenaltyScore, matrixTotalScore,
             partnerLevel: matrixTotalScore >= 80 ? 'A' : matrixTotalScore >= 50 ? 'B' : 'C',
             statusZone: avgScore > 0.8 ? 'green' : avgScore > 0.5 ? 'yellow' : 'red',
             statusLabel: avgScore > 0.8 ? 'Excellent' : avgScore > 0.5 ? 'Good' : 'Needs Review',
@@ -2446,7 +2462,7 @@ function renderUI() {
         tr.className = 'partner-row';
         const qk = row.q;
         const dk = row.details || {};
-        const tooltip = `Сделок: ${row.dealsCount}\nПлощадь: ${(row.totalArea || 0).toFixed(1)} м²\nЗамечаний: ${row.remarksCount}\nДней просрочки: ${row.remarksLateDaysTotal || 0}\nПослабление по замечаниям: x${formatMetricNumber(getRemarksReliefFactor(row.bitrixPartnerId), 2)}\nБез даты замечания: ${row.remarkMissingDateCount || 0}\nБез обратной связи: ${row.remarkMissingFeedbackCount || 0}${row.manualAdjustment ? `\nРучная поправка: ${row.manualAdjustment.reason} (${row.manualAdjustment.multiplier > 1 ? '+' : ''}${formatMetricNumber((row.manualAdjustment.multiplier - 1) * 100, 0)}%)` : ''}\nУровень: ${row.partnerLevel}\nID: ${row.bitrixPartnerId}`;
+        const tooltip = `Сделок: ${row.dealsCount}\nПлощадь: ${(row.totalArea || 0).toFixed(1)} м²\nЗамечаний: ${row.remarksCount}\nДней просрочки: ${row.remarksLateDaysTotal || 0}\nПослабление по замечаниям: x${formatMetricNumber(getRemarksReliefFactor(row.bitrixPartnerId), 2)}\nБез даты замечания: ${row.remarkMissingDateCount || 0}\nБез обратной связи: ${row.remarkMissingFeedbackCount || 0}\nУровень: ${row.partnerLevel}\nID: ${row.bitrixPartnerId}`;
         const complexityTooltip = buildComplexityTooltip(row);
 
         const cells = visibleColumns.map((column, index) => {
@@ -2777,6 +2793,7 @@ const DASHBOARD_TEST_API = {
     getUpravlenkaQ,
     getClocksterQ,
     buildClocksterMetrics,
+    applyHiddenComplexityBoost,
     getMatrixRowsSnapshot: () => matrixRows.map(row => ({ ...row }))
 };
 
