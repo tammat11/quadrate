@@ -1590,7 +1590,7 @@ function findNumericField(item, patterns) {
 
 function getTrainingQ(pid) {
     const items = opuByPartner[pid];
-    if (!items || items.length === 0) return 1.0;
+    if (!items || items.length === 0) return 0.4;
     let total = 0;
     let count = 0;
     for (const i of items) {
@@ -1599,7 +1599,7 @@ function getTrainingQ(pid) {
         total += avgSum;
         count++;
     }
-    if (count === 0) return 1.0;
+    if (count === 0) return 0.4;
     return Math.min(1, (total / count) / 10);
 }
 
@@ -1787,7 +1787,7 @@ function getTrainingMetricDetail(pid) {
     }
 
     if (count === 0) {
-        return { format: 'percent', digits: 0, sub: 'нет данных', title: 'Нет записей обучения за выбранный период' };
+        return { format: 'percent', digits: 0, sub: '4/10', title: 'Нет записей обучения за выбранный период; применяется дефолт 40%' };
     }
 
     const avg = total / count;

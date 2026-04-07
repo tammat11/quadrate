@@ -374,6 +374,16 @@ test('getTrainingQ читает живой bitrix-ключ ufCrm_KASJD12', () =>
     assert.equal(dashboard.getTrainingQ('p1'), 0.85);
 });
 
+test('getTrainingQ без данных ставит дефолт 40%', () => {
+    dashboard.applyTestState({
+        opuItems: []
+    });
+
+    dashboard.buildIndexes();
+
+    assert.equal(dashboard.getTrainingQ('p1'), 0.4);
+});
+
 test('getRealizationQ пока возвращает заглушку 1.0', () => {
     global.document = {
         getElementById(id) {
