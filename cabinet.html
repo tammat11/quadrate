@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Личный кабинет | Квадрат мечты</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="loader" class="loader" style="display: none;">
+        <div class="spinner"></div>
+        <div id="loaderProgressBar">
+            <div id="loaderProgressFill"></div>
+        </div>
+        <div id="loaderStatus" class="loader-status-text">Подготовка...</div>
+    </div>
+
+    <main class="cabinet-shell">
+        <section id="authPanel" class="cabinet-auth-panel">
+            <div class="cabinet-brand">
+                <span class="cabinet-brand-kicker">Партнёрский кабинет</span>
+                <h1>Квадрат мечты</h1>
+                <p>Вход по коду из WhatsApp. После входа увидишь только свои баллы, замечания и расшифровку расчёта.</p>
+            </div>
+
+            <form id="phoneForm" class="cabinet-form">
+                <label for="phoneInput">WhatsApp номер</label>
+                <div class="cabinet-input-row">
+                    <input id="phoneInput" name="phone" type="tel" autocomplete="tel" placeholder="+7 777 000 00 00" required>
+                    <button type="submit">Получить код</button>
+                </div>
+            </form>
+
+            <form id="codeForm" class="cabinet-form" hidden>
+                <label for="codeInput">Код из WhatsApp</label>
+                <div class="cabinet-input-row">
+                    <input id="codeInput" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" required>
+                    <button type="submit">Войти</button>
+                </div>
+                <button id="changePhoneBtn" type="button" class="cabinet-link-button">Другой номер</button>
+            </form>
+
+            <p id="authMessage" class="cabinet-message"></p>
+        </section>
+
+        <section id="cabinetPanel" class="cabinet-panel" hidden>
+            <header class="cabinet-header">
+                <div>
+                    <h1 id="cabinetTitle">Личный кабинет</h1>
+                    <p id="cabinetSubtitle"></p>
+                </div>
+                <div class="controls">
+                    <select id="monthSelect"></select>
+                    <button id="cabinetRefreshBtn" type="button">Обновить</button>
+                    <button id="logoutBtn" type="button">Выйти</button>
+                </div>
+            </header>
+
+            <section id="cabinetHero" class="cabinet-overview"></section>
+
+            <div id="cabinetStats" class="stats-grid cabinet-stats"></div>
+
+            <div class="content-block">
+                <div class="content-block-header">
+                    <div class="content-block-title-wrap">
+                        <h2>Разбор по критериям</h2>
+                        <p>Здесь видно, какие блоки подняли итог, а какие тянут его вниз в выбранном месяце.</p>
+                    </div>
+                    <div class="cabinet-view-toggle" role="tablist" aria-label="Раздел кабинета">
+                        <button id="detailsTabBtn" class="cabinet-toggle is-active" type="button" role="tab" aria-selected="true">Детали</button>
+                        <button id="managementTabBtn" class="cabinet-toggle" type="button" role="tab" aria-selected="false">Управленка</button>
+                    </div>
+                </div>
+                <div id="detailsPane" class="cabinet-pane">
+                    <div id="cabinetDetails" class="cabinet-details-grid"></div>
+                    <div id="cabinetDetailsExplained" class="cabinet-explained"></div>
+                </div>
+                <div id="managementPane" class="cabinet-pane" hidden>
+                    <div class="cabinet-placeholder">
+                        <h3>Управленка</h3>
+                        <p>Сюда вынесем ручную оценку, комментарии руководителя и историю изменений по месяцу.</p>
+                        <div class="cabinet-placeholder-points">
+                            <div class="cabinet-placeholder-point">Ручная оценка по управленке за месяц</div>
+                            <div class="cabinet-placeholder-point">Комментарий, за что балл был поднят или снижен</div>
+                            <div class="cabinet-placeholder-point">История изменений, если оценку корректировали позже</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="dashboard.js"></script>
+    <script src="cabinet.js"></script>
+</body>
+</html>

@@ -27,6 +27,7 @@ const FIELDS = {
 const CATEGORY_REALIZATION_COPY = '79';
 const FOT_TRIGGER_STAGE_IDS = new Set(['C69:UC_966DTL', 'C79:UC_JK572B']);
 const FOT_DB_MONTH_SHIFT = 0;
+const FOT_TARGET_CONTRACT_RATIO = 0.6;
 const FOT_DB_PARTNER_OVERRIDES = {
     '2361989': 105,
     '2361991': 1509,
@@ -132,7 +133,7 @@ const NEGATIVE_REMARK_SOURCE_IDS = new Set(['43609', '43607', '43735', '43709', 
 const NEGATIVE_REMARK_LABEL_PARTS = ['замечание'];
 const POSITIVE_REMARK_SOURCE_IDS = new Set(['43713', '43711', '43715']);
 const POSITIVE_REMARK_SOURCE_LABEL_PARTS = ['положительный отзыв'];
-const AUDIT_NEGATIVE_DEAL_PENALTY = 0.5;
+const AUDIT_NEGATIVE_DEAL_PENALTY = 0;
 
 const MATRIX = {
     relations: [
@@ -187,7 +188,7 @@ const HIDDEN_COMPLEXITY_BOOSTS = {
     '2362027': { area: 0.05, opu: 0.05 }  // Нысанбеков Е.
 };
 
-const CACHE_KEY = 'dashboardCacheV3';
+const CACHE_KEY = 'dashboardCacheV4';
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 часа
 
 // ——— Глобальное состояние ———
@@ -219,6 +220,7 @@ let auditCountsByPartner = {};
 let accountCoeffStatsByPartner = {};
 let opuComplexityStatsByPartner = {};
 let remarksReliefBenchmark = null;
+let bitrixPortalBase = '';
 let complexityBenchmarks = {
     objects: null,
     area: null,
@@ -226,6 +228,7 @@ let complexityBenchmarks = {
 };
 let fotDbStatsByPartnerMonth = {};
 let fotDbPartnerLookup = {};
+let fotContractsByPartnerMonth = {};
 let selectedExamplePartnerId = '';
 let expandedMatrixGroups = {
     relations: false,
@@ -233,17 +236,19 @@ let expandedMatrixGroups = {
     operations: false
 };
 let lastRenderedTimestamp = 0;
+let sharedCacheSyncTimer = null;
 
 const MATRIX_GROUP_CONFIG = [
     {
-        id: 'relations',
-        label: 'Отношения',
-        scoreField: 'relationsScore',
-        sub: '3 крит.',
+        id: 'operations',
+        label: 'Операционка',
+        scoreField: 'operationsScore',
+        sub: '4 крит.',
         items: [
-            { key: 'calls', label: 'Обзвон' },
-            { key: 'remarks', label: 'Замечания' },
-            { key: 'audit', label: 'Аудит' }
+            { key: 'clockster', label: 'Клостер' },
+            { key: 'training', label: 'Обучение' },
+            { key: 'discipline', label: 'Дисциплины' },
+            { key: 'umsrm', label: 'УМС/РМ' }
         ]
     },
     {
@@ -257,15 +262,14 @@ const MATRIX_GROUP_CONFIG = [
         ]
     },
     {
-        id: 'operations',
-        label: 'ОПУ',
-        scoreField: 'operationsScore',
-        sub: '4 крит.',
+        id: 'relations',
+        label: 'Отношения',
+        scoreField: 'relationsScore',
+        sub: '3 крит.',
         items: [
-            { key: 'clockster', label: 'Клостер' },
-            { key: 'training', label: 'Обучение' },
-            { key: 'discipline', label: 'Дисциплины' },
-            { key: 'umsrm', label: 'УМС/РМ' }
+            { key: 'calls', label: 'Обзвон' },
+            { key: 'remarks', label: 'Замечания' },
+            { key: 'audit', label: 'Аудит' }
         ]
     }
 ];
@@ -372,10 +376,21 @@ function getCallsReportMonths(selectedMonth) {
     return [selectedMonth];
 }
 
-function getAllowedReportingMonths() {
+function getReportingMonthLimit(referenceDate = new Date()) {
+    const baseDate = referenceDate instanceof Date && !Number.isNaN(referenceDate.getTime())
+        ? referenceDate
+        : new Date();
+    const currentMonthKey = formatMonthKey(new Date(baseDate.getFullYear(), baseDate.getMonth(), 1));
+    if (compareMonthKeys(currentMonthKey, REPORTING_MONTH_START) < 0) return REPORTING_MONTH_START;
+    if (compareMonthKeys(currentMonthKey, REPORTING_MONTH_END) > 0) return REPORTING_MONTH_END;
+    return currentMonthKey;
+}
+
+function getAllowedReportingMonths(referenceDate = new Date()) {
     const months = [];
     const [startYear, startMonth] = REPORTING_MONTH_START.split('-').map(Number);
-    const [endYear, endMonth] = REPORTING_MONTH_END.split('-').map(Number);
+    const reportingLimit = getReportingMonthLimit(referenceDate);
+    const [endYear, endMonth] = reportingLimit.split('-').map(Number);
     const cursor = new Date(startYear, startMonth - 1, 1);
     const limit = new Date(endYear, endMonth - 1, 1);
 
@@ -387,9 +402,9 @@ function getAllowedReportingMonths() {
     return months;
 }
 
-function normalizeSelectedMonth(monthKey) {
+function normalizeSelectedMonth(monthKey, referenceDate = new Date()) {
     if (monthKey === 'all' || monthKey === SUMMARY_FILTER_VALUE) return SUMMARY_FILTER_VALUE;
-    if (isMonthInReportingRange(monthKey)) return monthKey;
+    if (isMonthInReportingRange(monthKey) && getAllowedReportingMonths(referenceDate).includes(monthKey)) return monthKey;
     return REPORTING_MONTH_START;
 }
 
@@ -456,6 +471,51 @@ function shiftMonthKey(monthKey, delta) {
     return formatMonthKey(date);
 }
 
+const RU_MONTH_INDEX = {
+    январь: 1,
+    января: 1,
+    февраль: 2,
+    февраля: 2,
+    март: 3,
+    марта: 3,
+    апрель: 4,
+    апреля: 4,
+    май: 5,
+    мая: 5,
+    июнь: 6,
+    июня: 6,
+    июль: 7,
+    июля: 7,
+    август: 8,
+    августа: 8,
+    сентябрь: 9,
+    сентября: 9,
+    октябрь: 10,
+    октября: 10,
+    ноябрь: 11,
+    ноября: 11,
+    декабрь: 12,
+    декабря: 12
+};
+
+function normalizeMonthKeyValue(value) {
+    const raw = normalizeScalar(value);
+    if (raw == null || raw === '') return '';
+    const text = String(raw).trim();
+
+    const directMonth = text.match(/^(\d{4})-(\d{2})/);
+    if (directMonth) return `${directMonth[1]}-${directMonth[2]}`;
+
+    const ruMatch = text.toLowerCase().match(/([а-яё]+)\s+(\d{4})/u);
+    if (ruMatch) {
+        const monthNumber = RU_MONTH_INDEX[ruMatch[1].replace(/ё/g, 'е')];
+        if (monthNumber) return `${ruMatch[2]}-${String(monthNumber).padStart(2, '0')}`;
+    }
+
+    const date = new Date(text);
+    return formatMonthKey(date);
+}
+
 function getClocksterMonthKey() {
     return getSelectedMonth();
 }
@@ -470,24 +530,25 @@ function getMonthDateRange(monthKey) {
 }
 
 function extractDealMonthKey(deal, fallbackFields = []) {
-    const rawMonth = normalizeScalar(getFieldValue(deal, FIELDS.MONTH_ACCRUAL));
-    if (rawMonth) {
-        const parsed = new Date(rawMonth);
-        const monthKey = formatMonthKey(parsed);
-        if (monthKey) return monthKey;
-        const text = String(rawMonth).trim();
-        const directMonth = text.match(/^(\d{4})-(\d{2})/);
-        if (directMonth) return `${directMonth[1]}-${directMonth[2]}`;
-    }
+    const monthKeyFromAccrual = normalizeMonthKeyValue(getFieldValue(deal, FIELDS.MONTH_ACCRUAL));
+    if (monthKeyFromAccrual) return monthKeyFromAccrual;
 
     for (const fieldName of fallbackFields) {
-        const raw = normalizeScalar(getFieldValue(deal, fieldName));
-        if (!raw) continue;
-        const monthKey = formatMonthKey(new Date(raw));
+        const monthKey = normalizeMonthKeyValue(getFieldValue(deal, fieldName));
         if (monthKey) return monthKey;
     }
 
     return '';
+}
+
+function extractCallsMonthKey(item) {
+    const raw = normalizeScalar(getFieldValue(item, FIELDS.CALLS_DATE));
+    if (!raw) return '';
+    const monthKey = formatMonthKey(new Date(raw));
+    if (monthKey) return monthKey;
+    const text = String(raw).trim();
+    const directMonth = text.match(/^(\d{4})-(\d{2})/);
+    return directMonth ? `${directMonth[1]}-${directMonth[2]}` : '';
 }
 
 function extractTrainingMonthKey(item) {
@@ -558,7 +619,7 @@ function getFilteredRemarkDeals() {
 
 // ——— Select-поля для разных воронок ———
 const SELECT_DEALS = ['ID', 'CATEGORY_ID', 'STAGE_ID', 'COMPANY_ID', 'CONTACT_ID', 'UF_CRM_ACTIVE_ADDRESS', FIELDS.PARTNER, 'ASSIGNED_BY_ID', 'MOVED_TIME', 'CLOSEDATE', 'DATE_CREATE', 'OPPORTUNITY', FIELDS.AREA, FIELDS.MONTH_ACCRUAL];
-const SELECT_REMARKS = ['ID', FIELDS.PARTNER, 'ASSIGNED_BY_ID', 'DATE_CREATE', FIELDS.REMARK_DATE, FIELDS.FEEDBACK_DATE, FIELDS.REMARK_SOURCE];
+const SELECT_REMARKS = ['ID', 'TITLE', FIELDS.PARTNER, 'ASSIGNED_BY_ID', 'DATE_CREATE', FIELDS.REMARK_DATE, FIELDS.FEEDBACK_DATE, FIELDS.REMARK_SOURCE];
 
 // ——— Хелперы расчётов ———
 
@@ -675,6 +736,7 @@ function buildRemarkMetrics(selectedMonth) {
 
         metrics[pid].items.push({
             id: getFieldValue(deal, 'ID') ?? deal?.id,
+            title: normalizeScalar(getFieldValue(deal, 'TITLE')) || '',
             remarkDate,
             feedbackDate,
             lateDays,
@@ -1104,6 +1166,9 @@ function scorePartnerNameMatch(bitrixName, dbName) {
 }
 
 function getFotDbMonthKeyFromRow(item) {
+    const labelMonthKey = normalizeMonthKeyValue(item?.period_label);
+    if (labelMonthKey) return labelMonthKey;
+
     const year = Number(item?.period_year);
     const monthZeroBased = Number(item?.period_month);
     if (!Number.isFinite(year) || !Number.isFinite(monthZeroBased)) return null;
@@ -1129,24 +1194,48 @@ function buildFotDbIndexes() {
         const dbPartnerId = String(item?.partner_id ?? '').trim();
         const partnerName = String(item?.partner_name ?? '').trim();
         const monthKey = getFotDbMonthKeyFromRow(item);
-        const objectBitrixId = String(item?.object_bitrix_id ?? '').trim();
-        if (!dbPartnerId || !monthKey || !objectBitrixId) continue;
+        if (!dbPartnerId || !monthKey) continue;
 
         if (!fotDbStatsByPartnerMonth[dbPartnerId]) fotDbStatsByPartnerMonth[dbPartnerId] = {};
         if (!fotDbStatsByPartnerMonth[dbPartnerId][monthKey]) {
             fotDbStatsByPartnerMonth[dbPartnerId][monthKey] = {
                 partnerName,
-                objectIds: new Set(),
                 paymentsCount: 0,
                 totalAmount: 0
             };
         }
 
         const stats = fotDbStatsByPartnerMonth[dbPartnerId][monthKey];
-        stats.objectIds.add(objectBitrixId);
         stats.paymentsCount += Number(item?.payments_count) || 0;
         stats.totalAmount += parseFloat(item?.total_amount) || 0;
         if (!stats.partnerName && partnerName) stats.partnerName = partnerName;
+    }
+}
+
+function buildFotContractIndexes() {
+    fotContractsByPartnerMonth = {};
+
+    for (const deal of deals69) {
+        const pid = normalizePartnerId(deal);
+        if (!pid || pid === '__no_partner__' || pid === 'undefined') continue;
+
+        const monthKey = normalizeMonthKeyValue(getFieldValue(deal, FIELDS.MONTH_ACCRUAL));
+        if (!isMonthInReportingRange(monthKey)) continue;
+
+        const amount = Number(getFieldValue(deal, 'OPPORTUNITY')) || 0;
+        if (amount <= 0) continue;
+
+        if (!fotContractsByPartnerMonth[pid]) fotContractsByPartnerMonth[pid] = {};
+        if (!fotContractsByPartnerMonth[pid][monthKey]) {
+            fotContractsByPartnerMonth[pid][monthKey] = {
+                contractAmount: 0,
+                dealsCount: 0
+            };
+        }
+
+        const stats = fotContractsByPartnerMonth[pid][monthKey];
+        stats.contractAmount += amount;
+        stats.dealsCount += 1;
     }
 }
 
@@ -1203,24 +1292,23 @@ function buildFotDbPartnerLookup() {
 }
 
 function getFotDbStats(pid) {
-    const totalObjects = partnersData[pid]?.dealsCount || 0;
-    if (totalObjects <= 0) {
-        return {
-            totalObjects: 0,
-            paidObjects: 0,
-            paymentsCount: 0,
-            totalAmount: 0,
-            monthKeys: [],
-            hasMapping: false
-        };
-    }
-
     const mapping = fotDbPartnerLookup[String(pid)];
     const monthKeys = getFotDbMonthsForSelection();
+    const contractsByMonth = fotContractsByPartnerMonth[String(pid)] || {};
+    let contractAmount = 0;
+    let contractDealsCount = 0;
+    for (const monthKey of monthKeys) {
+        const stats = contractsByMonth[monthKey];
+        if (!stats) continue;
+        contractAmount += Number(stats.contractAmount) || 0;
+        contractDealsCount += Number(stats.dealsCount) || 0;
+    }
+
     if (!mapping) {
         return {
-            totalObjects,
-            paidObjects: 0,
+            contractAmount,
+            contractDealsCount,
+            targetAmount: contractAmount * FOT_TARGET_CONTRACT_RATIO,
             paymentsCount: 0,
             totalAmount: 0,
             monthKeys,
@@ -1229,21 +1317,20 @@ function getFotDbStats(pid) {
     }
 
     const byMonth = fotDbStatsByPartnerMonth[String(mapping.dbPartnerId)] || {};
-    const objectIds = new Set();
     let paymentsCount = 0;
     let totalAmount = 0;
 
     for (const monthKey of monthKeys) {
         const stats = byMonth[monthKey];
         if (!stats) continue;
-        for (const objectId of stats.objectIds) objectIds.add(objectId);
         paymentsCount += Number(stats.paymentsCount) || 0;
         totalAmount += Number(stats.totalAmount) || 0;
     }
 
     return {
-        totalObjects,
-        paidObjects: objectIds.size,
+        contractAmount,
+        contractDealsCount,
+        targetAmount: contractAmount * FOT_TARGET_CONTRACT_RATIO,
         paymentsCount,
         totalAmount,
         monthKeys,
@@ -1415,12 +1502,13 @@ function buildIndexes() {
     auditCountsByPartner = buildAuditCounts(selectedMonth);
     buildOpuComplexityStats();
     buildAccountCoeffStats();
+    buildFotContractIndexes();
     buildFotDbIndexes();
     buildFotDbPartnerLookup();
 
     callsByPartner = {};
     for (const item of callsItems) {
-        const itemMonth = extractDealMonthKey(item, [FIELDS.CALLS_DATE, 'CREATED_TIME', 'UPDATED_TIME']);
+        const itemMonth = extractCallsMonthKey(item);
         if (callsMonths ? !callsMonths.includes(itemMonth) : false) continue;
         const pid = getCallsPartnerId(item);
         if (!pid) continue;
@@ -1573,8 +1661,13 @@ function getRemarksQ(pid) {
 }
 
 function getRealizationQ(pid) {
-    void pid;
-    return 1.0;
+    const stats = getFotDbStats(pid);
+    if (!stats.contractAmount || stats.contractAmount <= 0) return 1.0;
+
+    const targetAmount = stats.targetAmount || (stats.contractAmount * FOT_TARGET_CONTRACT_RATIO);
+    if (targetAmount <= 0) return 1.0;
+
+    return Math.min(1, Math.max(0, stats.totalAmount / targetAmount));
 }
 
 function findNumericField(item, patterns) {
@@ -1621,7 +1714,8 @@ function getDisciplineQ(pid) {
 }
 
 function getAuditQ(pid) {
-    return auditCountsByPartner[String(pid)] ?? 0;
+    void pid;
+    return 0;
 }
 function getUpravlenkaQ(pid) {
     const record = managementScoresByPartner[String(pid)];
@@ -1661,6 +1755,15 @@ function formatPercent(value, digits = 0) {
     return `${(Number(value) * 100).toFixed(digits).replace(/\.00$/, '')}%`;
 }
 
+function formatMoneyShort(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric === 0) return '0';
+    const abs = Math.abs(numeric);
+    if (abs >= 1_000_000) return `${formatMetricNumber(numeric / 1_000_000, 1)}м`;
+    if (abs >= 1_000) return `${formatMetricNumber(numeric / 1_000, 1)}к`;
+    return formatMetricNumber(numeric, 0);
+}
+
 function escapeHtml(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -1668,6 +1771,12 @@ function escapeHtml(value) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+function buildBitrixDealUrl(dealId) {
+    const id = String(dealId || '').trim();
+    if (!id || !bitrixPortalBase) return '';
+    return `${bitrixPortalBase}/crm/deal/details/${id}/`;
 }
 
 function getCallsMetricDetail(pid) {
@@ -1723,18 +1832,44 @@ function getRemarksMetricDetail(pid) {
 }
 
 function getAuditMetricDetail(pid) {
-    const count = auditCountsByPartner[String(pid)] ?? 0;
+    void pid;
+    const count = 0;
     return {
         displayValue: count,
         digits: 0,
         sub: 'сделок',
-        title: `Отрицательных аудитов по полю "Дата проверки объекта": ${formatMetricNumber(count, 0)}; штраф: -${formatMetricNumber(count * AUDIT_NEGATIVE_DEAL_PENALTY, 0)} бал.`
+        title: 'Аудит временно обнулен и не влияет на итог'
     };
 }
 
 function getRealizationMetricDetail(pid) {
-    void pid;
-    return { format: 'percent', digits: 0, displayText: '-', sub: 'заглушка', title: 'ФОТ временно отключён и не влияет на расчёт' };
+    const stats = getFotDbStats(pid);
+    const contractAmount = Number(stats.contractAmount) || 0;
+    if (contractAmount <= 0) {
+        return {
+            format: 'percent',
+            digits: 0,
+            displayText: '-',
+            sub: 'нет данных',
+            title: 'Нет договоров с месяцем начисления за выбранный период; ФОТ не влияет на расчёт'
+        };
+    }
+
+    const targetAmount = Number(stats.targetAmount) || (contractAmount * FOT_TARGET_CONTRACT_RATIO);
+    const paidAmount = Number(stats.totalAmount) || 0;
+    const rawRatio = targetAmount > 0 ? paidAmount / targetAmount : 0;
+    const displayRatio = Math.min(1, Math.max(0, rawRatio));
+    const mappingText = stats.hasMapping
+        ? `партнер в базе оплат: ${stats.dbPartnerName || stats.dbPartnerId}`
+        : 'партнер не сопоставлен с базой оплат';
+
+    return {
+        format: 'percent',
+        digits: 0,
+        displayValue: displayRatio,
+        sub: `${formatMoneyShort(paidAmount)} / ${formatMoneyShort(targetAmount)}`,
+        title: `Договоры: ${formatMoneyShort(contractAmount)}; цель 60%: ${formatMoneyShort(targetAmount)}; выплаты людям: ${formatMoneyShort(paidAmount)}; выполнение: ${formatPercent(rawRatio)}; сделок: ${formatMetricNumber(stats.contractDealsCount || 0, 0)}; платежей: ${formatMetricNumber(stats.paymentsCount || 0, 0)}; ${mappingText}`
+    };
 }
 
 function getUpravlenkaMetricDetail(pid) {
@@ -1787,7 +1922,7 @@ function getTrainingMetricDetail(pid) {
     }
 
     if (count === 0) {
-        return { format: 'percent', digits: 0, sub: '4/10', title: 'Нет записей обучения за выбранный период; применяется дефолт 40%' };
+        return { format: 'percent', digits: 0, sub: '4/10 (нет данных)', title: 'Нет записей обучения за выбранный период; применяется дефолт 40%' };
     }
 
     const avg = total / count;
@@ -1824,7 +1959,128 @@ function getDisciplineMetricDetail(pid) {
 }
 
 function getUmsrmMetricDetail() {
-    return { format: 'percent', digits: 0, displayText: '-', sub: 'заглушка', title: 'УМС/РМ пока не подключен к реальным данным' };
+    return { format: 'percent', digits: 0, sub: '100%', title: 'УМС/РМ' };
+}
+
+function buildPartnerBreakdown(pid, rowData = null) {
+    const remarkMetric = remarkMetricsByPartner[String(pid)] || null;
+    const callsItemsForPartner = callsByPartner[String(pid)] || [];
+    const trainingItemsForPartner = opuByPartner[String(pid)] || [];
+    const disciplineStats = disciplineStatsByPartner[String(pid)] || null;
+    const managementRecord = managementScoresByPartner[String(pid)] || null;
+    const fotStats = getFotDbStats(pid);
+    const clocksterMetric = clocksterMetricsByPartner[String(pid)] || null;
+    const remarksRelief = getRemarksReliefFactor(pid);
+    const row = rowData || null;
+    const overdueRemarkItems = (remarkMetric?.items || []).filter(item => Number(item?.lateDays) > 0);
+
+    return {
+        summary: {
+            finalScore: row?.matrixTotalScore || 0,
+            rawTotal: row?.rawTotal || 0,
+            complexityCoeff: row?.complexityCoeff || 1
+        },
+        calls: {
+            score: getCallsQ(pid),
+            title: 'Обзвон',
+            lines: [
+                `Ответов, вошедших в расчёт: ${callsItemsForPartner.length ? getCallsMetricDetail(pid).sub || 'есть данные' : 'нет данных'}`,
+                `Q обзвона: ${formatPercent(getCallsQ(pid), 0)}`
+            ]
+        },
+        remarks: {
+            score: getRemarksQ(pid),
+            title: 'Замечания',
+            reliefFactor: remarksRelief,
+            totalLateDays: Number(remarkMetric?.totalLateDays) || 0,
+            totalPenalty: Number(remarkMetric?.totalPenalty) || 0,
+            overdueCount: overdueRemarkItems.length,
+            lines: [
+                `Замечаний в расчёте: ${remarkMetric?.rowCount || 0}`,
+                `Просроченных замечаний: ${overdueRemarkItems.length}`,
+                `Суммарная просрочка: ${remarkMetric?.totalLateDays || 0} дн.`,
+                `Штраф до послабления: ${formatMetricNumber(remarkMetric?.totalPenalty || 0, 2)}`,
+                `Послабление за объём замечаний: x${formatMetricNumber(remarksRelief, 2)}`,
+                `Итоговый Q замечаний: ${formatPercent(getRemarksQ(pid), 0)}`
+            ],
+            items: overdueRemarkItems.map(item => ({
+                id: String(item.id || ''),
+                label: item.title || 'Замечание без названия',
+                url: buildBitrixDealUrl(item.id),
+                remarkDate: item.remarkDate || '',
+                feedbackDate: item.feedbackDate || '',
+                lateDays: item.lateDays == null ? null : Number(item.lateDays),
+                penalty: Number(item.penalty) || 0,
+                status: `Просрочка ${item.lateDays} дн., штраф ${formatMetricNumber(item.penalty, 2)}`
+            }))
+        },
+        audit: {
+            score: getAuditQ(pid),
+            title: 'Аудит',
+            lines: []
+        },
+        realization: {
+            score: getRealizationQ(pid),
+            title: 'ФОТ',
+            lines: [
+                `Сумма договоров за период: ${formatMoneyShort(fotStats.contractAmount || 0)}`,
+                `Цель по выплатам людям (60%): ${formatMoneyShort(fotStats.targetAmount || 0)}`,
+                `Фактические выплаты: ${formatMoneyShort(fotStats.totalAmount || 0)}`,
+                `Сделок в расчёте: ${formatMetricNumber(fotStats.contractDealsCount || 0, 0)}`,
+                `Платежей в базе: ${formatMetricNumber(fotStats.paymentsCount || 0, 0)}`
+            ]
+        },
+        upravlenka: {
+            score: getUpravlenkaQ(pid),
+            title: 'Управленка',
+            lines: managementRecord
+                ? [
+                    `Ручная оценка управленки: ${formatMetricNumber(managementRecord.score, 2)} из 1`,
+                    `Последнее обновление: ${managementRecord.updatedAt || 'без даты'}`
+                ]
+                : ['Оценка за выбранный месяц пока не заполнена.']
+        },
+        clockster: {
+            score: getClocksterQ(pid),
+            title: 'Клостер',
+            lines: usesHoursBasedClockster(pid)
+                ? [
+                    `Часы на объектах: ${formatMetricNumber(clocksterMetric?.hours || 0, 1)}`,
+                    `Объектов в базе 69: ${formatMetricNumber(row?.dealsCount || 0, 0)}`
+                ]
+                : [
+                    `Уникальных приходов: ${formatMetricNumber(clocksterMetric?.visits || 0, 0)}`,
+                    `Уникальных объектов: ${formatMetricNumber(clocksterMetric?.uniqueObjects || 0, 0)}`,
+                    `Объектов в базе 69: ${formatMetricNumber(row?.dealsCount || 0, 0)}`
+                ]
+        },
+        training: {
+            score: getTrainingQ(pid),
+            title: 'Обучение',
+            lines: trainingItemsForPartner.length
+                ? [
+                    `Записей обучения: ${trainingItemsForPartner.length}`,
+                    `Средний балл/сумма: ${getTrainingMetricDetail(pid).sub || ''}`
+                ]
+                : ['За выбранный период записей обучения нет.']
+        },
+        discipline: {
+            score: getDisciplineQ(pid),
+            title: 'Дисциплины',
+            lines: disciplineStats
+                ? [
+                    `Всего планёрок: ${formatMetricNumber(disciplineStats.totalMeetings || 0, 0)}`,
+                    `Пропусков: ${formatMetricNumber(disciplineStats.absences || 0, 0)}`,
+                    `Итоговый Q дисциплины: ${formatPercent(getDisciplineQ(pid), 0)}`
+                ]
+                : ['За выбранный период нарушений не зафиксировано.']
+        },
+        umsrm: {
+            score: getUmsrmQ(pid),
+            title: 'УМС/РМ',
+            lines: []
+        }
+    };
 }
 
 function buildMetricDetails(pid) {
@@ -2402,19 +2658,30 @@ function buildMatrixRows() {
         const auditPenaltyScore = q.audit * AUDIT_NEGATIVE_DEAL_PENALTY;
         const matrixTotalScore = roundTo(preAuditTotalScore - auditPenaltyScore, 2);
         const avgScore = data.dealsCount ? data.totalScore / data.dealsCount : 0;
-
-        matrixRows.push({
+        const rowDraft = {
             bitrixPartnerId: pid,
             name: data.name,
             q,
             dealsCount: data.dealsCount || 0,
             totalArea: data.totalArea || 0,
-            relationsScore, moneyScore, operationsScore,
-            rawTotal, complexityCoeff, complexityParts, preAuditTotalScore, auditPenaltyScore, matrixTotalScore,
+            relationsScore,
+            moneyScore,
+            operationsScore,
+            rawTotal,
+            complexityCoeff,
+            complexityParts,
+            preAuditTotalScore,
+            auditPenaltyScore,
+            matrixTotalScore
+        };
+
+        matrixRows.push({
+            ...rowDraft,
             partnerLevel: matrixTotalScore >= 80 ? 'A' : matrixTotalScore >= 50 ? 'B' : 'C',
             statusZone: avgScore > 0.8 ? 'green' : avgScore > 0.5 ? 'yellow' : 'red',
             statusLabel: avgScore > 0.8 ? 'Excellent' : avgScore > 0.5 ? 'Good' : 'Needs Review',
             details,
+            breakdown: buildPartnerBreakdown(pid, rowDraft),
             remarksCount: data.remarksCount || 0,
             remarksLateDaysTotal: data.remarkLateDaysTotal || 0,
             remarkMissingDateCount: data.remarkMissingDateCount || 0,
@@ -2455,42 +2722,44 @@ function renderUI() {
     renderMatrixHeader();
 
     const matrixBody = document.getElementById('matrixBody');
-    matrixBody.innerHTML = '';
-    const visibleColumns = getVisibleMatrixColumns();
-    for (const [rowIndex, row] of matrixRows.entries()) {
-        const tr = document.createElement('tr');
-        tr.className = 'partner-row';
-        const qk = row.q;
-        const dk = row.details || {};
-        const tooltip = `Сделок: ${row.dealsCount}\nПлощадь: ${(row.totalArea || 0).toFixed(1)} м²\nЗамечаний: ${row.remarksCount}\nДней просрочки: ${row.remarksLateDaysTotal || 0}\nПослабление по замечаниям: x${formatMetricNumber(getRemarksReliefFactor(row.bitrixPartnerId), 2)}\nБез даты замечания: ${row.remarkMissingDateCount || 0}\nБез обратной связи: ${row.remarkMissingFeedbackCount || 0}\nУровень: ${row.partnerLevel}\nID: ${row.bitrixPartnerId}`;
-        const complexityTooltip = buildComplexityTooltip(row);
+    if (matrixBody) {
+        matrixBody.innerHTML = '';
+        const visibleColumns = getVisibleMatrixColumns();
+        for (const [rowIndex, row] of matrixRows.entries()) {
+            const tr = document.createElement('tr');
+            tr.className = 'partner-row';
+            const qk = row.q;
+            const dk = row.details || {};
+            const tooltip = `Сделок: ${row.dealsCount}\nПлощадь: ${(row.totalArea || 0).toFixed(1)} м²\nЗамечаний: ${row.remarksCount}\nДней просрочки: ${row.remarksLateDaysTotal || 0}\nПослабление по замечаниям: x${formatMetricNumber(getRemarksReliefFactor(row.bitrixPartnerId), 2)}\nБез даты замечания: ${row.remarkMissingDateCount || 0}\nБез обратной связи: ${row.remarkMissingFeedbackCount || 0}\nУровень: ${row.partnerLevel}\nID: ${row.bitrixPartnerId}`;
+            const complexityTooltip = buildComplexityTooltip(row);
 
-        const cells = visibleColumns.map((column, index) => {
-            const className = getMatrixColumnClasses(visibleColumns, index);
-            const classAttr = className ? ` class="${className}${column.type === 'partner' ? ' partner-name-cell' : ''}"` : (column.type === 'partner' ? ' class="partner-name-cell"' : '');
-            switch (column.type) {
-                case 'partner':
-                    return `<td${classAttr} title="${tooltip}"><div class="partner-rank-cell"><span class="partner-rank-index">${rowIndex + 1}</span><span class="partner-rank-name">${escapeHtml(row.name)}</span></div></td>`;
-                case 'group-summary':
-                    return renderSummaryCell(row[column.scoreField], {
-                        sub: column.sub,
-                        title: `${column.label}: ${(row[column.scoreField] || 0).toFixed(1)}`
-                    }).replace('<td', `<td class="${className}"`);
-                case 'metric':
-                    return renderMetricCell(qk[column.metricKey], dk[column.metricKey]).replace('<td', `<td class="${className}"`);
-                case 'raw-total':
-                    return `<td${classAttr}>${(row.rawTotal || 0).toFixed(1)}</td>`;
-                case 'coeff':
-                    return `<td${classAttr} title="${complexityTooltip}">${(row.complexityCoeff || 1).toFixed(2)}</td>`;
-                case 'total':
-                    return `<td${classAttr}><strong>${(row.matrixTotalScore || 0).toFixed(1)}</strong></td>`;
-                default:
-                    return `<td${classAttr}></td>`;
-            }
-        });
+            const cells = visibleColumns.map((column, index) => {
+                const className = getMatrixColumnClasses(visibleColumns, index);
+                const classAttr = className ? ` class="${className}${column.type === 'partner' ? ' partner-name-cell' : ''}"` : (column.type === 'partner' ? ' class="partner-name-cell"' : '');
+                switch (column.type) {
+                    case 'partner':
+                        return `<td${classAttr} title="${tooltip}"><div class="partner-rank-cell"><span class="partner-rank-index">${rowIndex + 1}</span><span class="partner-rank-name">${escapeHtml(row.name)}</span></div></td>`;
+                    case 'group-summary':
+                        return renderSummaryCell(row[column.scoreField], {
+                            sub: column.sub,
+                            title: `${column.label}: ${(row[column.scoreField] || 0).toFixed(1)}`
+                        }).replace('<td', `<td class="${className}"`);
+                    case 'metric':
+                        return renderMetricCell(qk[column.metricKey], dk[column.metricKey]).replace('<td', `<td class="${className}"`);
+                    case 'raw-total':
+                        return `<td${classAttr}>${(row.rawTotal || 0).toFixed(1)}</td>`;
+                    case 'coeff':
+                        return `<td${classAttr} title="${complexityTooltip}">${(row.complexityCoeff || 1).toFixed(2)}</td>`;
+                    case 'total':
+                        return `<td${classAttr}><strong>${(row.matrixTotalScore || 0).toFixed(1)}</strong></td>`;
+                    default:
+                        return `<td${classAttr}></td>`;
+                }
+            });
 
-        tr.innerHTML = cells.join('');
-        matrixBody.appendChild(tr);
+            tr.innerHTML = cells.join('');
+            matrixBody.appendChild(tr);
+        }
     }
 
     renderExampleCalculation();
@@ -2499,39 +2768,96 @@ function renderUI() {
     updateLastUpdatedLabel();
 }
 
+function setText(id, value) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = value;
+}
+
 function updateStats(matrixData, partners) {
     const activeMatrixRows = Array.isArray(matrixData) ? matrixData.filter(row => (row.dealsCount || 0) > 0) : [];
     const fallbackPartners = Array.isArray(partners) ? partners.filter(p => (p.dealsCount || 0) > 0) : [];
 
     if (activeMatrixRows.length > 0) {
+        const topRow = activeMatrixRows[0];
+        const riskRow = activeMatrixRows[activeMatrixRows.length - 1];
         const totalAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.matrixTotalScore || 0), 0) / activeMatrixRows.length).toFixed(1);
-        document.getElementById('avgScoreTotal').textContent = totalAvg;
-        document.getElementById('activeDealsCount').textContent = activeMatrixRows.length;
-        document.getElementById('topPartnerName').textContent = activeMatrixRows[0].name || '—';
+        const relationsAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.relationsScore || 0), 0) / activeMatrixRows.length).toFixed(1);
+        const moneyAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.moneyScore || 0), 0) / activeMatrixRows.length).toFixed(1);
+        const operationsAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.operationsScore || 0), 0) / activeMatrixRows.length).toFixed(1);
+        const complexityAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.complexityCoeff || 1), 0) / activeMatrixRows.length).toFixed(2);
+        const totalObjects = activeMatrixRows.reduce((sum, row) => sum + (row.dealsCount || 0), 0);
+        const totalArea = activeMatrixRows.reduce((sum, row) => sum + (row.totalArea || 0), 0);
+        const overdueRemarks = activeMatrixRows.reduce((sum, row) => {
+            const breakdownCount = Number(row.breakdown?.remarks?.overdueCount);
+            if (Number.isFinite(breakdownCount)) return sum + breakdownCount;
+            return sum + ((row.breakdown?.remarks?.items || []).length || 0);
+        }, 0);
+        const overdueDays = activeMatrixRows.reduce((sum, row) => sum + (row.remarksLateDaysTotal || 0), 0);
+        const totalAudits = activeMatrixRows.reduce((sum, row) => sum + (auditCountsByPartner[row.partnerId] || 0), 0);
+
+        setText('avgScoreTotal', totalAvg);
+        setText('activeDealsCount', String(activeMatrixRows.length));
+        setText('heroObjectsCount', formatMetricNumber(totalObjects, 0));
+        setText('heroAreaTotal', `${formatMetricNumber(totalArea, 1)} м²`);
+        setText('remarkDebtValue', `${formatMetricNumber(overdueDays, 0)} дн.`);
+        setText('remarkDebtSub', `${formatMetricNumber(overdueRemarks, 0)} просроченных замечаний`);
+        setText('auditDealsValue', String(totalAudits));
+        setText('relationsAvg', relationsAvg);
+        setText('moneyAvg', moneyAvg);
+        setText('operationsAvg', operationsAvg);
+        setText('complexityAvg', complexityAvg);
+        setText('matrixOverview', `${activeMatrixRows.length} партнёров · ${formatMetricNumber(totalObjects, 0)} объектов · ${formatMetricNumber(overdueRemarks, 0)} просрочек`);
         return;
     }
 
     if (fallbackPartners.length === 0) return;
 
     const totalAvg = (fallbackPartners.reduce((sum, p) => sum + (p.totalScore / (p.dealsCount || 1)), 0) / fallbackPartners.length).toFixed(2);
-    document.getElementById('avgScoreTotal').textContent = totalAvg;
-    document.getElementById('activeDealsCount').textContent = fallbackPartners.length;
-    document.getElementById('topPartnerName').textContent = fallbackPartners[0]?.name || '—';
+    setText('avgScoreTotal', totalAvg);
+    setText('activeDealsCount', String(fallbackPartners.length));
+    setText('topPartnerName', fallbackPartners[0]?.name || '—');
 }
 
 function updateLastUpdatedLabel() {
-    let el = document.getElementById('lastUpdated');
-    if (!el) {
-        el = document.createElement('span');
-        el.id = 'lastUpdated';
-        el.style.cssText = 'font-size:0.8rem;color:var(--text-dim);margin-left:1rem;';
-        document.getElementById('refreshBtn')?.parentElement?.appendChild(el);
-    }
+    const el = document.getElementById('lastUpdated');
+    if (!el) return;
     const d = lastRenderedTimestamp ? new Date(lastRenderedTimestamp) : new Date();
     el.textContent = `Данные от ${d.toLocaleDateString('ru')} ${d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 // ——— localStorage кэш ———
+
+function buildSharedCachePayload(localPayload) {
+    return {
+        timestamp: localPayload.timestamp,
+        partnerMap: localPayload.partnerMap,
+        companyMap: localPayload.companyMap,
+        accountCoefficientRows: localPayload.accountCoefficientRows,
+        list115PartnerByElementId: localPayload.list115PartnerByElementId,
+        lastUserMap,
+        deals69: localPayload.deals69,
+        deals79: localPayload.deals79,
+        remarkDeals: localPayload.remarkDeals,
+        callsItems: localPayload.callsItems,
+        disciplineItems: localPayload.disciplineItems,
+        opuItems: localPayload.opuItems,
+        managementItems: localPayload.managementItems,
+        fotDbItems: localPayload.fotDbItems,
+        clocksterMetricsCache: localPayload.clocksterMetricsCache
+    };
+}
+
+function queueSharedCacheSync(payload) {
+    if (typeof fetch === 'undefined') return;
+    if (sharedCacheSyncTimer) clearTimeout(sharedCacheSyncTimer);
+    sharedCacheSyncTimer = setTimeout(() => {
+        fetch('/api/shared-cache', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildSharedCachePayload(payload))
+        }).catch(() => {});
+    }, 250);
+}
 
 function saveCache() {
     try {
@@ -2541,9 +2867,10 @@ function saveCache() {
             selectedExamplePartnerId,
             expandedMatrixGroups,
             clocksterMetricsCache,
-            partnerMap, companyMap, accountCoefficientRows, deals69, deals79, remarkDeals, callsItems, disciplineItems, opuItems, managementItems, list115PartnerByElementId, fotDbItems
+            partnerMap, companyMap, accountCoefficientRows, deals69, deals79, remarkDeals, callsItems, disciplineItems, opuItems, managementItems, list115PartnerByElementId, lastUserMap, fotDbItems
         };
         localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+        queueSharedCacheSync(payload);
     } catch (_) {}
 }
 
@@ -2558,6 +2885,7 @@ function loadCache() {
 }
 
 function applyBootstrapSnapshot(snapshot) {
+    bitrixPortalBase = snapshot.bitrixPortalBase || '';
     partnerMap = snapshot.partnerMap || {};
     companyMap = snapshot.companyMap || {};
     accountCoefficientRows = snapshot.accountCoefficientRows || [];
@@ -2712,6 +3040,7 @@ function applyTestState(patch = {}) {
     if (Object.hasOwn(patch, 'partnersData')) partnersData = patch.partnersData;
     if (Object.hasOwn(patch, 'remarkMetricsByPartner')) remarkMetricsByPartner = patch.remarkMetricsByPartner;
     if (Object.hasOwn(patch, 'auditCountsByPartner')) auditCountsByPartner = patch.auditCountsByPartner;
+    if (Object.hasOwn(patch, 'bitrixPortalBase')) bitrixPortalBase = patch.bitrixPortalBase;
     if (Object.hasOwn(patch, 'expandedMatrixGroups')) expandedMatrixGroups = patch.expandedMatrixGroups;
 }
 
@@ -2732,6 +3061,7 @@ function resetTestState() {
         list115PartnerByElementId: {},
         clocksterMetricsByPartner: {},
         clocksterMetricsCache: {},
+        bitrixPortalBase: '',
         partnersData: {},
         remarkMetricsByPartner: {},
         auditCountsByPartner: {},
@@ -2794,6 +3124,7 @@ const DASHBOARD_TEST_API = {
     getClocksterQ,
     buildClocksterMetrics,
     applyHiddenComplexityBoost,
+    normalizeMonthKeyValue,
     getMatrixRowsSnapshot: () => matrixRows.map(row => ({ ...row }))
 };
 
@@ -2801,10 +3132,22 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = DASHBOARD_TEST_API;
 }
 
+if (typeof window !== 'undefined') {
+    window.DashboardApp = {
+        loadDashboard,
+        renderFromSnapshot,
+        setupMonthSelect,
+        getMatrixRowsSnapshot: () => matrixRows.map(row => ({ ...row })),
+        formatPercent,
+        formatMetricNumber,
+        escapeHtml
+    };
+}
+
 // ——— Запуск ———
 
 if (typeof document !== 'undefined' && typeof window !== 'undefined') {
-    document.getElementById('refreshBtn').addEventListener('click', () => loadDashboard({ forceRefresh: true }));
+    document.getElementById('refreshBtn')?.addEventListener('click', () => loadDashboard({ forceRefresh: true }));
     document.getElementById('monthSelect')?.addEventListener('change', () => {
         Promise.resolve().then(async () => {
             buildIndexes();
@@ -2817,6 +3160,7 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined') {
     });
 
     window.addEventListener('load', () => {
+        if (!document.getElementById('matrixBody') && !document.body?.dataset?.dashboardAutoload) return;
         setupMonthSelect();
         loadDashboard();
     });

@@ -26,32 +26,74 @@
             <div class="controls">
                 <select id="monthSelect"></select>
                 <button id="refreshBtn">Обновить данные</button>
+                <span id="lastUpdated" class="dashboard-last-updated"></span>
             </div>
         </header>
 
-        <div class="stats-grid">
-            <div class="stat-card">
-                <h3>Средний балл сети</h3>
-                <div id="avgScoreTotal" class="stat-value">0.00</div>
-                <div class="stat-trend">По текущему фильтру</div>
+        <section class="analytics-hero">
+            <article class="analytics-hero-card analytics-hero-primary">
+                <div class="analytics-card-label">Средний балл сети</div>
+                <div id="avgScoreTotal" class="analytics-hero-value">0.0</div>
+                <div class="analytics-inline-metrics">
+                    <div class="analytics-inline-metric">
+                        <span>Партнёров</span>
+                        <strong id="activeDealsCount">0</strong>
+                    </div>
+                    <div class="analytics-inline-metric">
+                        <span>Объектов</span>
+                        <strong id="heroObjectsCount">0</strong>
+                    </div>
+                    <div class="analytics-inline-metric">
+                        <span>Площадь</span>
+                        <strong id="heroAreaTotal">0 м²</strong>
+                    </div>
+                </div>
+            </article>
+
+            <div class="analytics-side-grid">
+
+                <article class="analytics-side-card">
+                    <div class="analytics-card-label">Просрочки по замечаниям</div>
+                    <div id="remarkDebtValue" class="analytics-side-value">0 дн.</div>
+                    <div id="remarkDebtSub" class="analytics-side-sub">0 замечаний с просрочкой</div>
+                </article>
+                <article class="analytics-side-card">
+                    <div class="analytics-card-label">Аудиты качества</div>
+                    <div id="auditDealsValue" class="analytics-side-value">0</div>
+                    <div id="auditDealsSub" class="analytics-side-sub">замечаний</div>
+                </article>
             </div>
-            <div class="stat-card">
-                <h3>Партнёров в матрице</h3>
-                <div id="activeDealsCount" class="stat-value">0</div>
-                <div class="stat-trend">С активными объектами</div>
-            </div>
-            <div class="stat-card">
-                <h3>Топ партнер</h3>
-                <div id="topPartnerName" class="stat-value" style="font-size: 1.5rem;">—</div>
-                <div class="stat-trend">Итоговый лидер</div>
-            </div>
-        </div>
+        </section>
+
+        <section class="analytics-breakdown-strip">
+            <article class="analytics-strip-card">
+                <div class="analytics-card-label">Операционка</div>
+                <div id="operationsAvg" class="analytics-strip-value">0.0</div>
+            </article>
+            <article class="analytics-strip-card">
+                <div class="analytics-card-label">Деньги</div>
+                <div id="moneyAvg" class="analytics-strip-value">0.0</div>
+            </article>
+            <article class="analytics-strip-card">
+                <div class="analytics-card-label">Отношения</div>
+                <div id="relationsAvg" class="analytics-strip-value">0.0</div>
+            </article>
+            <article class="analytics-strip-card">
+                <div class="analytics-card-label">Средний коэффициент</div>
+                <div id="complexityAvg" class="analytics-strip-value">1.00</div>
+            </article>
+        </section>
 
         <div class="main-content">
             <div class="content-block content-block-wide">
                 <div class="content-block-header">
-                    <h2>Матрица партнёров</h2>
-                    <div id="matrixGroupControls" class="matrix-group-controls"></div>
+                    <div class="content-block-title-wrap">
+                        <h2>Матрица партнёров</h2>
+                    </div>
+                    <div class="content-block-actions">
+                        <div id="matrixOverview" class="matrix-overview-pill">0 партнёров в выборке</div>
+                        <div id="matrixGroupControls" class="matrix-group-controls"></div>
+                    </div>
                 </div>
                 <div class="matrix-table-shell">
                     <table id="matrixTable">

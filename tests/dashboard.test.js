@@ -41,15 +41,21 @@ test('calculateRemarkPenalty считает по excel-логике Q - (P + 2) 
     );
 });
 
-test('месячный диапазон отчета ограничен мартом 2026 — мартом 2027', () => {
-    const months = dashboard.getAllowedReportingMonths();
+test('месячный фильтр показывает только наступившие месяцы в диапазоне март 2026 — март 2027', () => {
+    const months = dashboard.getAllowedReportingMonths(new Date('2026-04-30T12:00:00+05:00'));
     assert.equal(months[0], '2026-03');
-    assert.equal(months.at(-1), '2027-03');
-    assert.equal(months.length, 13);
+    assert.equal(months.at(-1), '2026-04');
+    assert.deepEqual(months, ['2026-03', '2026-04']);
+    assert.deepEqual(
+        dashboard.getAllowedReportingMonths(new Date('2026-05-01T00:00:00+05:00')),
+        ['2026-03', '2026-04', '2026-05']
+    );
+    assert.equal(dashboard.getAllowedReportingMonths(new Date('2027-04-01T12:00:00+05:00')).at(-1), '2027-03');
     assert.equal(dashboard.normalizeSelectedMonth('all'), 'summary');
-    assert.equal(dashboard.normalizeSelectedMonth('2024-03'), '2026-03');
-    assert.equal(dashboard.normalizeSelectedMonth('2027-04'), '2026-03');
-    assert.equal(dashboard.normalizeSelectedMonth('2026-11'), '2026-11');
+    assert.equal(dashboard.normalizeSelectedMonth('2024-03', new Date('2026-04-30T12:00:00+05:00')), '2026-03');
+    assert.equal(dashboard.normalizeSelectedMonth('2027-04', new Date('2026-04-30T12:00:00+05:00')), '2026-03');
+    assert.equal(dashboard.normalizeSelectedMonth('2026-11', new Date('2026-04-30T12:00:00+05:00')), '2026-03');
+    assert.equal(dashboard.normalizeSelectedMonth('2026-04', new Date('2026-04-30T12:00:00+05:00')), '2026-04');
 });
 
 test('дефолтный месяц — предыдущий, но в пределах отчетного диапазона', () => {
@@ -376,15 +382,25 @@ test('getTrainingQ читает живой bitrix-ключ ufCrm_KASJD12', () =>
 
 test('getTrainingQ без данных ставит дефолт 40%', () => {
     dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1'
+        },
+        deals69: [
+            { UF_CRM_1743669674: 'p1' }
+        ],
         opuItems: []
     });
 
     dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
 
     assert.equal(dashboard.getTrainingQ('p1'), 0.4);
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
+    assert.equal(row.details.training.sub, '4/10 (нет данных)');
 });
 
-test('getRealizationQ пока возвращает заглушку 1.0', () => {
+test('getRealizationQ считает ФОТ как выплаты людям к 60% суммы договоров', () => {
     global.document = {
         getElementById(id) {
             if (id === 'monthSelect') return { value: '2026-03' };
@@ -397,22 +413,77 @@ test('getRealizationQ пока возвращает заглушку 1.0', () =>
             '3421309': 'Токенова Сара'
         },
         deals69: [
-            { ID: 'd1', UF_CRM_1743669674: '3421309' },
-            { ID: 'd2', UF_CRM_1743669674: '3421309' },
-            { ID: 'd3', UF_CRM_1743669674: '3421309' },
-            { ID: 'd4', UF_CRM_1743669674: '3421309' }
+            { ID: 'd1', UF_CRM_1743669674: '3421309', UF_CRM_1707145268405: '2026-03-01T00:00:00+03:00', OPPORTUNITY: '4000000' },
+            { ID: 'd2', UF_CRM_1743669674: '3421309', UF_CRM_1707145268405: '2026-03-10T00:00:00+03:00', OPPORTUNITY: '6000000' },
+            { ID: 'd3', UF_CRM_1743669674: '3421309', UF_CRM_1707145268405: '2026-02-10T00:00:00+03:00', OPPORTUNITY: '6000000' }
         ],
         fotDbItems: [
-            { partner_id: 1794, partner_name: 'Токенова Сара', period_year: 2026, period_month: 2, object_bitrix_id: 'obj-1', payments_count: 2, total_amount: '1000' },
-            { partner_id: 1794, partner_name: 'Токенова Сара', period_year: 2026, period_month: 2, object_bitrix_id: 'obj-2', payments_count: 1, total_amount: '500' },
-            { partner_id: 1794, partner_name: 'Токенова Сара', period_year: 2026, period_month: 1, object_bitrix_id: 'obj-3', payments_count: 1, total_amount: '500' }
+            { partner_id: 1794, partner_name: 'Токенова Сара', period_label: 'Март 2026', payments_count: 2, total_amount: '3000000' },
+            { partner_id: 1794, partner_name: 'Токенова Сара', period_label: 'Февраль 2026', payments_count: 1, total_amount: '6000000' }
         ]
     });
 
     dashboard.buildIndexes();
     dashboard.processData();
 
-    assert.equal(dashboard.getRealizationQ('3421309'), 1);
+    assert.equal(dashboard.getRealizationQ('3421309'), 0.5);
+});
+
+test('getRealizationQ дает 100%, когда выплаты достигли 60% суммы договоров', () => {
+    global.document = {
+        getElementById(id) {
+            if (id === 'monthSelect') return { value: '2026-03' };
+            return null;
+        }
+    };
+
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1'
+        },
+        deals69: [
+            { ID: 'd1', UF_CRM_1743669674: 'p1', UF_CRM_1707145268405: '2026-03-01', OPPORTUNITY: '10000000' }
+        ],
+        fotDbItems: [
+            { partner_id: 1, partner_name: 'Партнер 1', period_label: 'Март 2026', payments_count: 1, total_amount: '6000000' }
+        ]
+    });
+
+    dashboard.buildIndexes();
+
+    assert.equal(dashboard.getRealizationQ('p1'), 1);
+});
+
+test('getRealizationQ зажимает ФОТ на 100%, а в деталях показывает превышение', () => {
+    global.document = {
+        getElementById(id) {
+            if (id === 'monthSelect') return { value: '2026-04' };
+            return null;
+        }
+    };
+
+    dashboard.applyTestState({
+        partnerMap: {
+            '3421309': 'Токенова Сара'
+        },
+        deals69: [
+            { ID: 'd1', UF_CRM_1743669674: '3421309', UF_CRM_1707145268405: 'Апрель 2026', OPPORTUNITY: '10000000' }
+        ],
+        fotDbItems: [
+            { partner_id: 1794, partner_name: 'Токенова Сара', period_label: 'Апрель 2026', payments_count: 3, total_amount: '9000000' }
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === '3421309');
+    assert.ok(row);
+    assert.equal(row.q.realization, 1);
+    assert.equal(row.details.realization.displayValue, 1);
+    assert.equal(row.details.realization.sub, '9.0м / 6.0м');
+    assert.match(row.details.realization.title, /выполнение: 150%/);
 });
 
 test('69 не режется фильтром месяца и остается базой объектов', () => {
@@ -479,7 +550,7 @@ test('фильтр месяца режет обзвон и обучение по
     assert.equal(dashboard.getTrainingQ('p1'), 0.5);
 });
 
-test('обзвон фильтруется по дате обзвона, а не по дате создания карточки', () => {
+test('обзвон фильтруется только по полю даты обзвона', () => {
     global.document = {
         getElementById(id) {
             if (id === 'monthSelect') return { value: '2026-03' };
@@ -491,14 +562,22 @@ test('обзвон фильтруется по дате обзвона, а не 
         callsItems: [
             {
                 ufCrm173Partner: 'p1',
+                UF_CRM_1707145268405: '2026-04-01T00:00:00+03:00',
                 createdTime: '2026-04-05T10:00:00+03:00',
                 ufCrm1731775114484085: '2026-03-20T12:00:00+03:00',
                 ufCrm173_1771396927: 141219
             },
             {
                 ufCrm173Partner: 'p1',
+                UF_CRM_1707145268405: '2026-03-01T00:00:00+03:00',
                 createdTime: '2026-03-05T10:00:00+03:00',
                 ufCrm1731775114484085: '2026-01-20T12:00:00+03:00',
+                ufCrm173_1771396927: 141215
+            },
+            {
+                ufCrm173Partner: 'p1',
+                UF_CRM_1707145268405: '2026-03-01T00:00:00+03:00',
+                createdTime: '2026-03-05T10:00:00+03:00',
                 ufCrm173_1771396927: 141215
             }
         ]
@@ -509,7 +588,7 @@ test('обзвон фильтруется по дате обзвона, а не 
     assert.equal(dashboard.getCallsQ('p1'), 1);
 });
 
-test('Общий свод берет только месяцы в диапазоне март 2026 — март 2027', () => {
+test('Общий свод берет только наступившие месяцы в диапазоне отчета', () => {
     global.document = {
         getElementById(id) {
             if (id === 'monthSelect') return { value: 'summary' };
@@ -519,9 +598,9 @@ test('Общий свод берет только месяцы в диапазо
 
     dashboard.applyTestState({
         callsItems: [
-            { ufCrm173Partner: 'p1', createdTime: '2026-03-05T10:00:00+03:00', ufCrm173_1771396927: 141219 },
-            { ufCrm173Partner: 'p1', createdTime: '2027-02-05T10:00:00+03:00', ufCrm173_1771396927: 141217 },
-            { ufCrm173Partner: 'p1', createdTime: '2025-12-05T10:00:00+03:00', ufCrm173_1771396927: 141215 }
+            { ufCrm173Partner: 'p1', ufCrm1731775114484085: '2026-03-05T10:00:00+03:00', ufCrm173_1771396927: 141219 },
+            { ufCrm173Partner: 'p1', ufCrm1731775114484085: '2027-02-05T10:00:00+03:00', ufCrm173_1771396927: 141217 },
+            { ufCrm173Partner: 'p1', ufCrm1731775114484085: '2025-12-05T10:00:00+03:00', ufCrm173_1771396927: 141215 }
         ],
         opuItems: [
             { UF_CRM_127_1756273714: 'p1', UF_CRM_127_1756290422310: '03', CREATED_TIME: '2026-03-31T11:18:34+03:00', UF_CRM_KASJD12: '5' },
@@ -532,7 +611,7 @@ test('Общий свод берет только месяцы в диапазо
 
     dashboard.buildIndexes();
 
-    assert.equal(dashboard.getCallsQ('p1'), 5 / 6);
+    assert.equal(dashboard.getCallsQ('p1'), 1);
     assert.equal(dashboard.getTrainingQ('p1'), 0.4);
 });
 
@@ -546,9 +625,9 @@ test('в марте обзвон захватывает еще и февраль
 
     dashboard.applyTestState({
         callsItems: [
-            { ufCrm173Partner: 'p1', createdTime: '2026-02-15T10:00:00+03:00', ufCrm173_1771396927: 141215 },
-            { ufCrm173Partner: 'p1', createdTime: '2026-03-15T10:00:00+03:00', ufCrm173_1771396927: 141219 },
-            { ufCrm173Partner: 'p1', createdTime: '2026-04-15T10:00:00+03:00', ufCrm173_1771396927: 141217 }
+            { ufCrm173Partner: 'p1', ufCrm1731775114484085: '2026-02-15T10:00:00+03:00', ufCrm173_1771396927: 141215 },
+            { ufCrm173Partner: 'p1', ufCrm1731775114484085: '2026-03-15T10:00:00+03:00', ufCrm173_1771396927: 141219 },
+            { ufCrm173Partner: 'p1', ufCrm1731775114484085: '2026-04-15T10:00:00+03:00', ufCrm173_1771396927: 141217 }
         ]
     });
 
@@ -557,7 +636,7 @@ test('в марте обзвон захватывает еще и февраль
     assert.equal(dashboard.getCallsQ('p1'), 2 / 3);
 });
 
-test('audit считает сделки с источником От аудитора замечание', () => {
+test('audit временно обнулен для всех', () => {
     global.document = {
         getElementById(id) {
             if (id === 'monthSelect') return { value: '2026-03' };
@@ -595,10 +674,10 @@ test('audit считает сделки с источником От аудит�
     dashboard.buildIndexes();
     dashboard.processData();
 
-    assert.equal(dashboard.getAuditQ('p1'), 2);
+    assert.equal(dashboard.getAuditQ('p1'), 0);
 });
 
-test('audit штрафует итог на 1 балл за каждую отрицательную сделку', () => {
+test('audit не штрафует итог, пока временно обнулен', () => {
     global.document = {
         getElementById(id) {
             if (id === 'monthSelect') return { value: '2026-03' };
@@ -628,8 +707,8 @@ test('audit штрафует итог на 1 балл за каждую отри
 
     const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
     assert.ok(row);
-    assert.equal(row.auditPenaltyScore, 1);
-    assert.equal(row.matrixTotalScore, Math.round((row.preAuditTotalScore - 1) * 100) / 100);
+    assert.equal(row.auditPenaltyScore, 0);
+    assert.equal(row.matrixTotalScore, Math.round(row.preAuditTotalScore * 100) / 100);
 });
 
 test('итог считается от отображаемых суммы и коэффициента, а не от скрытых дробей', () => {
@@ -695,7 +774,7 @@ test('extractTrainingMonthKey уважает номер месяца и корр
 
 test('матрица по умолчанию показывает только группы и раскрывает детали по кнопке', () => {
     let columns = dashboard.getVisibleMatrixColumns();
-    assert.deepEqual(columns.map(column => column.label), ['Партнер', 'Отношения', 'Деньги', 'ОПУ', 'Сумма', 'Коэфф.', 'Итог']);
+    assert.deepEqual(columns.map(column => column.label), ['Партнер', 'Операционка', 'Деньги', 'Отношения', 'Сумма', 'Коэфф.', 'Итог']);
 
     dashboard.applyTestState({
         expandedMatrixGroups: {
@@ -708,16 +787,16 @@ test('матрица по умолчанию показывает только �
     columns = dashboard.getVisibleMatrixColumns();
     assert.deepEqual(columns.map(column => column.label), [
         'Партнер',
-        'Отношения',
-        'Обзвон',
-        'Замечания',
-        'Аудит',
-        'Деньги',
-        'ОПУ',
+        'Операционка',
         'Клостер',
         'Обучение',
         'Дисциплины',
         'УМС/РМ',
+        'Деньги',
+        'Отношения',
+        'Обзвон',
+        'Замечания',
+        'Аудит',
         'Сумма',
         'Коэфф.',
         'Итог'
@@ -805,7 +884,7 @@ test('getClocksterQ возвращает 0, если объекты есть, а
     assert.equal(dashboard.getClocksterQ('p1'), 0);
 });
 
-test('заглушки ФОТ и УМС/РМ отображаются как тире, а не как 100%', () => {
+test('ФОТ без договоров отображается как тире, а УМС/РМ считается как 100%', () => {
     dashboard.applyTestState({
         partnerMap: {
             'p1': 'Партнер 1'
@@ -822,7 +901,11 @@ test('заглушки ФОТ и УМС/РМ отображаются как т�
     const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
     assert.ok(row);
     assert.equal(row.details.realization.displayText, '-');
-    assert.equal(row.details.umsrm.displayText, '-');
+    assert.equal(row.details.realization.sub, 'нет данных');
+    assert.equal(row.q.realization, 1);
+    assert.equal(row.q.umsrm, 1);
+    assert.equal(row.details.umsrm.displayText, undefined);
+    assert.equal(row.details.umsrm.sub, '100%');
 });
 
 test('коэф аккаунта берется по связке ответственный+компания, а общий коэф считается как среднее из четырех частей', () => {
@@ -990,6 +1073,43 @@ test('положительные отзывы не учитываются в з�
     assert.equal(row.remarksLateDaysTotal, 3);
     assert.equal(row.details.remarks.sub, '3/1');
     assert.equal(Number(row.q.remarks.toFixed(2)), 0.85);
+});
+
+test('просроченные замечания в кабинете показывают TITLE сделки', () => {
+    global.document = {
+        getElementById(id) {
+            if (id === 'monthSelect') return { value: '2026-03' };
+            return null;
+        }
+    };
+
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1'
+        },
+        deals69: [
+            { ID: 'd1', UF_CRM_1743669674: 'p1', UF_CRM_1707724024179: '100' }
+        ],
+        remarkDeals: [
+            {
+                ID: '109999',
+                TITLE: '«Magnum Cash&Carry» ТООАстана',
+                UF_CRM_1743669674: 'p1',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00',
+                UF_CRM_REVIEWDATE: '2026-03-10',
+                UF_CRM_FITBACK: '2026-03-15',
+                UF_CRM_1719824872888: '43607'
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
+    assert.ok(row);
+    assert.equal(row.breakdown.remarks.items[0].label, '«Magnum Cash&Carry» ТООАстана');
 });
 
 test('в количество замечаний попадают только отрицательные источники, без CSI и пустых', () => {
