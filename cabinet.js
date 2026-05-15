@@ -10,6 +10,7 @@ const cabinetRefreshBtn = document.getElementById('cabinetRefreshBtn');
 const logoutBtn = document.getElementById('logoutBtn');
 const cabinetStats = document.getElementById('cabinetStats');
 const cabinetHero = document.getElementById('cabinetHero');
+const cabinetPartnerPicker = document.getElementById('cabinetPartnerPicker');
 const cabinetDetails = document.getElementById('cabinetDetails');
 const cabinetDetailsExplained = document.getElementById('cabinetDetailsExplained');
 const cabinetTitle = document.getElementById('cabinetTitle');
@@ -24,6 +25,9 @@ let currentSession = null;
 let activeCabinetTab = 'details';
 let activeBreakdownFocus = 'calls';
 let activeCabinetRow = null;
+let selectedCabinetPartnerId = '';
+
+const CABINET_PARTNER_SELECTOR_PHONES = new Set(['77070522006']);
 
 const CABINET_METRIC_META = {
     calls: {
@@ -141,6 +145,70 @@ function findOwnRows(accounts, rows) {
     if (direct.length) return direct;
 
     return rows.filter(row => names.has(String(row.name || '').trim().toLowerCase()));
+}
+
+function findRowsForAccount(account, rows) {
+    if (!account) return [];
+    return findOwnRows([account], rows);
+}
+
+function canSelectAnyCabinetPartner() {
+    return Boolean(currentSession?.canChoosePartner)
+        || CABINET_PARTNER_SELECTOR_PHONES.has(normalizePhone(currentSession?.phone || currentPhone));
+}
+
+function getCabinetPartnerRowKey(row) {
+    return String(row?.bitrixPartnerId || row?.name || '');
+}
+
+function buildCabinetOptionFromRow(row) {
+    const id = getCabinetPartnerRowKey(row);
+    if (!id) return null;
+    return {
+        id,
+        label: row.name || 'Партнёр',
+        sub: `${row.dealsCount || 0} объектов · итог ${DashboardApp.formatMetricNumber(row.matrixTotalScore || 0, 1)}`,
+        row
+    };
+}
+
+function getSelectableRowsFromMatrix(rows) {
+    const seen = new Set();
+    return (rows || []).reduce((options, row) => {
+        const option = buildCabinetOptionFromRow(row);
+        if (!option || seen.has(option.id)) return options;
+        seen.add(option.id);
+        options.push(option);
+        return options;
+    }, []);
+}
+
+function getSelectableCabinetOptions(accounts, rows) {
+    if (canSelectAnyCabinetPartner()) {
+        return getSelectableRowsFromMatrix(rows);
+    }
+
+    if (!CABINET_PARTNER_SELECTOR_PHONES.has(normalizePhone(currentSession?.phone || currentPhone))) {
+        return [];
+    }
+
+    const seen = new Set();
+    const options = [];
+    for (const account of accounts || []) {
+        const matchedRows = findRowsForAccount(account, rows);
+        for (const row of matchedRows) {
+            const id = String(row.bitrixPartnerId || account.partnerBitrixId || account.listElementId || row.name || '');
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            options.push({
+                id,
+                label: row.name || account.listElementName || account.employeeName || 'Партнёр',
+                sub: `${row.dealsCount || 0} объектов · итог ${DashboardApp.formatMetricNumber(row.matrixTotalScore || 0, 1)}`,
+                row
+            });
+        }
+    }
+    return options;
 }
 
 function metricCard(label, value, sub = '') {
@@ -970,6 +1038,7 @@ function renderManagementPane(row) {
 
 function renderCabinetRows(rows) {
     if (!rows.length) {
+        renderCabinetPartnerPicker([]);
         cabinetHero.innerHTML = '';
         cabinetStats.innerHTML = metricCard('Данные', '-', 'Не нашли вашу строку в матрице');
         cabinetDetails.innerHTML = '<p class="cabinet-empty">Пока не нашли привязку к матрице.</p>';
@@ -1002,6 +1071,43 @@ function renderCabinetRows(rows) {
     if (managementPane) managementPane.innerHTML = renderManagementPane(row);
 }
 
+function renderCabinetPartnerPicker(options = []) {
+    if (!cabinetPartnerPicker) return;
+    if (options.length <= 1) {
+        cabinetPartnerPicker.hidden = true;
+        cabinetPartnerPicker.innerHTML = '';
+        return;
+    }
+
+    cabinetPartnerPicker.hidden = false;
+    const selectedOption = options.find(option => String(option.id) === String(selectedCabinetPartnerId)) || options[0];
+    cabinetPartnerPicker.innerHTML = `
+        <div class="cabinet-partner-picker-head">
+            <div>
+                <div class="cabinet-breakdown-title">Выбор партнёра</div>
+                <p>Твой номер открыт как админ: можно зайти в кабинет любого партнёра.</p>
+            </div>
+            <div class="cabinet-partner-current">${DashboardApp.escapeHtml(selectedOption?.sub || '')}</div>
+        </div>
+        <label class="cabinet-partner-select-wrap">
+            <span>Партнёр</span>
+            <select id="cabinetPartnerSelect">
+                ${options.map(option => `
+                    <option value="${DashboardApp.escapeHtml(option.id)}"${String(option.id) === String(selectedCabinetPartnerId) ? ' selected' : ''}>
+                        ${DashboardApp.escapeHtml(option.label)}
+                    </option>
+                `).join('')}
+            </select>
+        </label>
+    `;
+}
+
+cabinetPartnerPicker?.addEventListener('change', event => {
+    if (event.target?.id !== 'cabinetPartnerSelect') return;
+    selectedCabinetPartnerId = String(event.target.value || '');
+    loadCabinetData(false);
+});
+
 cabinetDetailsExplained.addEventListener('click', event => {
     const managementToggle = event.target.closest?.('[data-management-toggle]');
     if (managementToggle) {
@@ -1033,6 +1139,18 @@ async function loadCabinetData(forceRefresh = false) {
         DashboardApp.setupMonthSelect();
         await DashboardApp.loadDashboard({ forceRefresh });
         const rows = DashboardApp.getMatrixRowsSnapshot();
+        const options = getSelectableCabinetOptions(currentSession.accounts, rows);
+        if (options.length) {
+            if (!selectedCabinetPartnerId || !options.some(option => String(option.id) === String(selectedCabinetPartnerId))) {
+                selectedCabinetPartnerId = String(options[0].id);
+            }
+            renderCabinetPartnerPicker(options);
+            const selectedOption = options.find(option => String(option.id) === String(selectedCabinetPartnerId));
+            renderCabinetRows(selectedOption?.row ? [selectedOption.row] : []);
+            return;
+        }
+        selectedCabinetPartnerId = '';
+        renderCabinetPartnerPicker([]);
         renderCabinetRows(findOwnRows(currentSession.accounts, rows));
     } finally {
         cabinetRefreshBtn.disabled = false;
@@ -1088,6 +1206,7 @@ document.getElementById('monthSelect')?.addEventListener('change', () => loadCab
 logoutBtn.addEventListener('click', async () => {
     await postJson('/api/cabinet/logout').catch(() => {});
     currentSession = null;
+    selectedCabinetPartnerId = '';
     codeInput.value = '';
     showAuth();
 });

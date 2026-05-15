@@ -40,6 +40,7 @@ const CLOCKSTER_TOKEN = process.env.CLOCKSTER_TOKEN || '';
 const WHATSAPP_BOT_URL = process.env.WHATSAPP_BOT_URL || '';
 const WHATSAPP_BOT_TOKEN = process.env.WHATSAPP_BOT_TOKEN || '';
 const CABINET_CODE_TARGET_PHONE = normalizePhone(process.env.CABINET_CODE_TARGET_PHONE || '');
+const CABINET_PARTNER_PICKER_PHONE = normalizePhone(process.env.CABINET_PARTNER_PICKER_PHONE || '77070522006');
 const CABINET_CODE_TTL = Number(process.env.CABINET_CODE_TTL_MS || 5 * 60 * 1000);
 const CABINET_SESSION_TTL = Number(process.env.CABINET_SESSION_TTL_MS || 14 * 24 * 60 * 60 * 1000);
 const CABINET_DATABASE_URL = process.env.CABINET_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || '';
@@ -965,6 +966,10 @@ function shouldRefreshSessionAccounts(sessionAccounts = []) {
     return (sessionAccounts || []).some(account => account && typeof account === 'object' && !account.partnerBitrixId);
 }
 
+function canChooseCabinetPartner(phone) {
+    return Boolean(CABINET_PARTNER_PICKER_PHONE) && normalizePhone(phone) === CABINET_PARTNER_PICKER_PHONE;
+}
+
 function cabinetCookie(token, expiresAt) {
     const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
     return `cabinet_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
@@ -991,6 +996,7 @@ async function handleCabinetAuth(req, res, pathname) {
         sendJson(res, 200, {
             authenticated: true,
             phoneMasked: maskPhone(session.phone),
+            canChoosePartner: canChooseCabinetPartner(session.phone),
             accounts
         });
         return;
@@ -1022,7 +1028,7 @@ async function handleCabinetAuth(req, res, pathname) {
 
         const accountsByPhone = await getCabinetAccounts(Boolean(payload.refresh));
         const accounts = accountsByPhone[phone] || [];
-        if (accounts.length === 0) {
+        if (accounts.length === 0 && !canChooseCabinetPartner(phone)) {
             sendJson(res, 404, { error: 'Номер не найден в инфоблоке 109' });
             return;
         }
@@ -1066,7 +1072,7 @@ async function handleCabinetAuth(req, res, pathname) {
 
         const accountsByPhone = await getCabinetAccounts();
         const accounts = accountsByPhone[phone] || [];
-        if (accounts.length === 0) {
+        if (accounts.length === 0 && !canChooseCabinetPartner(phone)) {
             sendJson(res, 404, { error: 'Номер больше не привязан к кабинету' });
             return;
         }
@@ -1076,6 +1082,7 @@ async function handleCabinetAuth(req, res, pathname) {
         sendJsonWithHeaders(res, 200, {
             ok: true,
             phoneMasked: maskPhone(phone),
+            canChoosePartner: canChooseCabinetPartner(phone),
             accounts
         }, {
             'Set-Cookie': cabinetCookie(session.token, session.expiresAt)
