@@ -11,6 +11,22 @@
       "destination": "/api/index?__pathname=/api/bootstrap"
     },
     {
+      "source": "/api/bootstrap/sync",
+      "destination": "/api/index?__pathname=/api/bootstrap/sync"
+    },
+    {
+      "source": "/api/management-report",
+      "destination": "/api/index?__pathname=/api/management-report"
+    },
+    {
+      "source": "/api/shared-cache",
+      "destination": "/api/index?__pathname=/api/shared-cache"
+    },
+    {
+      "source": "/api/cabinet/:path*",
+      "destination": "/api/index?__pathname=/api/cabinet/:path*"
+    },
+    {
       "source": "/api/bitrix/:path*",
       "destination": "/api/index?__pathname=/api/bitrix/:path*"
     },

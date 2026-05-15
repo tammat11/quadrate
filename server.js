@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { URL } = require('node:url');
 const { Client } = require('pg');
+const mysql = require('mysql2/promise');
 
 function loadEnvFile(filePath) {
     if (!fs.existsSync(filePath)) return;
@@ -43,6 +44,13 @@ const CABINET_CODE_TTL = Number(process.env.CABINET_CODE_TTL_MS || 5 * 60 * 1000
 const CABINET_SESSION_TTL = Number(process.env.CABINET_SESSION_TTL_MS || 14 * 24 * 60 * 60 * 1000);
 const CABINET_DATABASE_URL = process.env.CABINET_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || '';
 const CABINET_DB_DISABLED = process.env.CABINET_DB_DISABLED === '1' || process.env.CABINET_DB_DISABLED === 'true';
+const MANAGEMENT_MYSQL_CONFIG = {
+    host: process.env.MYSQL_HOST || '',
+    port: Number(process.env.MYSQL_PORT || 3306),
+    user: process.env.MYSQL_USER || '',
+    password: process.env.MYSQL_PASSWORD || '',
+    database: process.env.MYSQL_DBNAME || process.env.MYSQL_DATABASE || ''
+};
 const DB_CONFIG = {
     host: process.env.DB_HOST || '',
     port: Number(process.env.DB_PORT || 5432),
@@ -89,6 +97,54 @@ const bootstrapDbState = {
 
 const SELECT_DEALS = ['ID', 'CATEGORY_ID', 'STAGE_ID', 'COMPANY_ID', 'CONTACT_ID', 'UF_CRM_ACTIVE_ADDRESS', 'UF_CRM_1743669674', 'ASSIGNED_BY_ID', 'MOVED_TIME', 'CLOSEDATE', 'DATE_CREATE', 'OPPORTUNITY', 'UF_CRM_1707724024179', 'UF_CRM_1707145268405'];
 const SELECT_REMARKS = ['ID', 'TITLE', 'UF_CRM_1743669674', 'ASSIGNED_BY_ID', 'DATE_CREATE', 'UF_CRM_REVIEWDATE', 'UF_CRM_FITBACK', 'UF_CRM_1719824872888', 'UF_CRM_1732104149680'];
+const MANAGEMENT_VIEW_COLUMNS = [
+    'external_id',
+    'Название',
+    'Номер_воронки',
+    'Наименовение_воронки',
+    'Наименование_стадии',
+    'Наименование_ИП_инфо',
+    'Ответственное_лицо_ИП_инфо',
+    'Адрес_объекта_инфо',
+    'Адрес_объекта_инфо_ID',
+    'BIN_партнера',
+    'Наименовение_компании_1',
+    'ФИО_1',
+    'Кураторы',
+    'Сдельщики',
+    'Месяц_начисления',
+    'Пользовательский',
+    'Реализация с НДС',
+    'НДС',
+    'УМС ELS',
+    'ФОТ ОФФ Битрикс',
+    'Kaspi/ JTI',
+    'ФОТ НЕОФ',
+    'Авансирования',
+    'Аренда спецтехники',
+    'Транспортные расходы',
+    'Ген. Уборка',
+    'УМС',
+    'Сумма_Товара',
+    'Ремонт',
+    'Сумма_на_снятие',
+    'Консалтинг',
+    'Оборудование',
+    'ИП_НДС_или_без_НДС',
+    'Налоги_по_зарплате',
+    'ОФ ЗП 1С',
+    'Самозанятые',
+    'Реализация без НДС',
+    'ИТОГО ФОТ',
+    'ИТОГО УМС',
+    'Бух. Услуги',
+    'Налоги самозанятых',
+    'ИПН/КПН',
+    'Eco Line УМС',
+    'Расходы ИП',
+    'Маржа Партнера',
+    'Маржа'
+];
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -133,6 +189,13 @@ function getCabinetDbConfig() {
     };
 }
 
+function getManagementMysqlConfig() {
+    if (!MANAGEMENT_MYSQL_CONFIG.host || !MANAGEMENT_MYSQL_CONFIG.user || !MANAGEMENT_MYSQL_CONFIG.password || !MANAGEMENT_MYSQL_CONFIG.database) {
+        return null;
+    }
+    return { ...MANAGEMENT_MYSQL_CONFIG };
+}
+
 function hasCabinetDbConfig() {
     return Boolean(getCabinetDbConfig());
 }
@@ -147,10 +210,70 @@ async function withPgClient(config, callback) {
     }
 }
 
+async function withMysqlClient(config, callback) {
+    const client = await mysql.createConnection({
+        host: config.host,
+        port: config.port,
+        user: config.user,
+        password: config.password,
+        database: config.database,
+        charset: 'utf8mb4'
+    });
+    try {
+        await client.query("SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci");
+        await client.query("SET collation_connection = 'utf8mb4_0900_ai_ci'");
+        return await callback(client);
+    } finally {
+        await client.end();
+    }
+}
+
 async function queryCabinetDb(queryText, params = []) {
     const config = getCabinetDbConfig();
     if (!config) throw new Error('Cabinet DB is not configured');
     return withPgClient(config, client => client.query(queryText, params));
+}
+
+async function queryManagementMysql(queryText, params = []) {
+    const config = getManagementMysqlConfig();
+    if (!config) throw new Error('Management MySQL is not configured');
+    return withMysqlClient(config, client => client.query(queryText, params));
+}
+
+function quoteMysqlIdentifier(identifier) {
+    return `\`${String(identifier).replace(/`/g, '``')}\``;
+}
+
+function parseMonthKeyRange(monthKey) {
+    if (!/^\d{4}-\d{2}$/.test(String(monthKey || ''))) return null;
+    const [year, month] = String(monthKey).split('-').map(Number);
+    const start = new Date(Date.UTC(year, month - 1, 1));
+    const end = new Date(Date.UTC(year, month, 1));
+    return {
+        start: start.toISOString().slice(0, 10),
+        end: end.toISOString().slice(0, 10)
+    };
+}
+
+async function fetchManagementRows(monthKey = '') {
+    const config = getManagementMysqlConfig();
+    if (!config) return [];
+
+    const selectColumns = [
+        ...MANAGEMENT_VIEW_COLUMNS.map(quoteMysqlIdentifier),
+        `DATE_FORMAT(${quoteMysqlIdentifier('Месяц_начисления')}, '%Y-%m') AS ${quoteMysqlIdentifier('__month_key')}`
+    ].join(', ');
+    const sqlParts = [`SELECT ${selectColumns} FROM ${quoteMysqlIdentifier('Marja_full')}`];
+    const params = [];
+    const monthRange = parseMonthKeyRange(monthKey);
+    if (monthRange) {
+        sqlParts.push(`WHERE ${quoteMysqlIdentifier('Месяц_начисления')} >= ? AND ${quoteMysqlIdentifier('Месяц_начисления')} < ?`);
+        params.push(monthRange.start, monthRange.end);
+    }
+    sqlParts.push(`ORDER BY ${quoteMysqlIdentifier('Месяц_начисления')} DESC, ${quoteMysqlIdentifier('external_id')} DESC`);
+    const sql = sqlParts.join(' ');
+    const [rows] = await queryManagementMysql(sql, params);
+    return rows;
 }
 
 async function ensureCabinetDbSchema() {
@@ -247,6 +370,7 @@ async function loadBootstrapSnapshotFromDb(snapshotKey = 'default') {
     if (!row || !row.payload_json) return null;
     return {
         ...row.payload_json,
+        bitrixPortalBase: row.payload_json.bitrixPortalBase || BITRIX_PORTAL_BASE || '',
         timestamp: row.payload_json.timestamp || new Date(row.generated_at).getTime()
     };
 }
@@ -290,7 +414,10 @@ function loadBootstrapCacheFromDisk() {
         if (!parsed?.data) return;
         if (parsed.cacheVersion !== BOOTSTRAP_CACHE_VERSION) return;
         bootstrapCache.timestamp = Number(parsed.timestamp) || Date.now();
-        bootstrapCache.data = parsed.data;
+        bootstrapCache.data = {
+            ...parsed.data,
+            bitrixPortalBase: parsed.data.bitrixPortalBase || BITRIX_PORTAL_BASE || ''
+        };
     } catch (error) {
         console.warn('loadBootstrapCacheFromDisk failed:', error.message || error);
     }
@@ -322,9 +449,13 @@ async function handleSharedCache(req, res) {
             return;
         }
 
-        bootstrapCache.timestamp = Number(parsed.timestamp) || Date.now();
-        bootstrapCache.data = parsed;
-        saveBootstrapCacheToDisk(parsed);
+        const payload = {
+            ...parsed,
+            bitrixPortalBase: parsed.bitrixPortalBase || BITRIX_PORTAL_BASE || ''
+        };
+        bootstrapCache.timestamp = Number(payload.timestamp) || Date.now();
+        bootstrapCache.data = payload;
+        saveBootstrapCacheToDisk(payload);
         sendJson(res, 200, { ok: true });
     } catch (error) {
         sendJson(res, 400, { error: error.message || 'Shared cache save failed' });
@@ -1215,6 +1346,54 @@ async function fetchFotDbItems() {
     }
 }
 
+function assembleBootstrapPayload(data = {}) {
+    const partnerMap = data.partnerMap || {};
+    const companyMap = data.companyMap || {};
+    const list115PartnerByElementId = data.list115PartnerByElementId || {};
+    const lastUserMap = data.lastUserMap || {};
+    const accountCoefficientRows = data.accountCoefficientRows || [];
+    const deals69 = Array.isArray(data.deals69) ? data.deals69 : [];
+    const deals79 = Array.isArray(data.deals79) ? data.deals79 : [];
+    const remarkDeals = Array.isArray(data.remarkDeals) ? data.remarkDeals : [];
+    const callsItems = Array.isArray(data.callsItems) ? data.callsItems : [];
+    const disciplineItems = Array.isArray(data.disciplineItems) ? data.disciplineItems : [];
+    const opuItems = Array.isArray(data.opuItems) ? data.opuItems : [];
+    const managementItems = Array.isArray(data.managementItems) ? data.managementItems : [];
+    const fotDbItems = Array.isArray(data.fotDbItems) ? data.fotDbItems : [];
+
+    return {
+        bitrixPortalBase: BITRIX_PORTAL_BASE,
+        partnerMap,
+        companyMap,
+        list115PartnerByElementId,
+        lastUserMap,
+        accountCoefficientRows,
+        deals69,
+        deals79,
+        remarkDeals,
+        callsItems,
+        disciplineItems,
+        opuItems,
+        managementItems,
+        fotDbItems,
+        counts: {
+            partners117: Object.keys(partnerMap).length,
+            refs115: Object.keys(list115PartnerByElementId).length,
+            users: Object.keys(lastUserMap).length,
+            companies: Object.keys(companyMap).length,
+            deals69: deals69.length,
+            deals79: deals79.length,
+            remarks81: remarkDeals.length,
+            calls431: callsItems.length,
+            discipline439: disciplineItems.length,
+            training311: opuItems.length,
+            management441: managementItems.length,
+            fotDbItems: fotDbItems.length,
+            accountCoefficientRows: accountCoefficientRows.length
+        }
+    };
+}
+
 async function buildBootstrapData() {
     const missingEnvVars = getMissingBootstrapEnvVars();
     if (missingEnvVars.length > 0) {
@@ -1235,6 +1414,7 @@ async function buildBootstrapData() {
 
     const [
         deals69,
+        deals79,
         remarkDeals,
         callsItems,
         disciplineItems,
@@ -1243,6 +1423,7 @@ async function buildBootstrapData() {
         fotDbItems
     ] = await Promise.all([
         fetchAllDeals(69, SELECT_DEALS),
+        fetchAllDeals(79, SELECT_DEALS),
         fetchAllDeals(81, SELECT_REMARKS),
         fetchAllItems(1364, { categoryId: 431 }),
         fetchAllItems(1364, { categoryId: 439 }),
@@ -1288,36 +1469,21 @@ async function buildBootstrapData() {
 
     const accountCoefficientRows = loadAccountCoefficientRows();
 
-    return {
-        bitrixPortalBase: BITRIX_PORTAL_BASE,
+    return assembleBootstrapPayload({
         partnerMap,
         companyMap,
         list115PartnerByElementId,
         lastUserMap: userMap,
         accountCoefficientRows,
         deals69,
-        deals79: [],
+        deals79,
         remarkDeals,
         callsItems,
         disciplineItems,
         opuItems,
         managementItems,
-        fotDbItems,
-        counts: {
-            partners117: partnerList.length,
-            refs115: refList.length,
-            users: users.length,
-            companies: companies.length,
-            deals69: deals69.length,
-            remarks81: remarkDeals.length,
-            calls431: callsItems.length,
-            discipline439: disciplineItems.length,
-            training311: opuItems.length,
-            management441: managementItems.length,
-            fotDbItems: fotDbItems.length,
-            accountCoefficientRows: accountCoefficientRows.length
-        }
-    };
+        fotDbItems
+    });
 }
 
 async function handleBootstrap(req, res) {
@@ -1326,14 +1492,20 @@ async function handleBootstrap(req, res) {
 
     if (!forceRefresh) {
         if (bootstrapCache.data) {
-            sendJson(res, 200, bootstrapCache.data);
+            sendJson(res, 200, {
+                ...bootstrapCache.data,
+                bitrixPortalBase: bootstrapCache.data.bitrixPortalBase || BITRIX_PORTAL_BASE || ''
+            });
             return;
         }
         const dbSnapshot = await loadBootstrapSnapshotFromDb();
         if (dbSnapshot) {
             bootstrapCache.timestamp = Number(dbSnapshot.timestamp) || Date.now();
             bootstrapCache.data = dbSnapshot;
-            sendJson(res, 200, dbSnapshot);
+            sendJson(res, 200, {
+                ...dbSnapshot,
+                bitrixPortalBase: dbSnapshot.bitrixPortalBase || BITRIX_PORTAL_BASE || ''
+            });
             return;
         }
     }
@@ -1343,6 +1515,7 @@ async function handleBootstrap(req, res) {
             .then(data => {
                 const payload = {
                     ...data,
+                    bitrixPortalBase: data.bitrixPortalBase || BITRIX_PORTAL_BASE || '',
                     timestamp: Date.now()
                 };
                 bootstrapCache.timestamp = payload.timestamp;
@@ -1365,7 +1538,10 @@ async function handleBootstrap(req, res) {
 
     try {
         const data = await bootstrapCache.promise;
-        sendJson(res, 200, data);
+        sendJson(res, 200, {
+            ...data,
+            bitrixPortalBase: data.bitrixPortalBase || BITRIX_PORTAL_BASE || ''
+        });
     } catch (error) {
         sendJson(res, 502, { error: error.message || 'Bootstrap load failed' });
     }
@@ -1381,6 +1557,7 @@ async function handleBootstrapSync(req, res) {
         const data = await buildBootstrapData();
         const payload = {
             ...data,
+            bitrixPortalBase: data.bitrixPortalBase || BITRIX_PORTAL_BASE || '',
             timestamp: Date.now()
         };
         bootstrapCache.timestamp = payload.timestamp;
@@ -1396,6 +1573,30 @@ async function handleBootstrapSync(req, res) {
     } catch (error) {
         await writeBootstrapSyncRun('error', error.message || 'manual sync failed');
         sendJson(res, 502, { error: error.message || 'Bootstrap sync failed' });
+    }
+}
+
+async function handleManagementReport(req, res) {
+    if (req.method !== 'GET') {
+        sendJson(res, 405, { error: 'Method not allowed' });
+        return;
+    }
+
+    try {
+        const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+        const month = String(requestUrl.searchParams.get('month') || '').trim();
+        const rows = await fetchManagementRows(month);
+        sendJson(res, 200, {
+            source: 'Marja_full',
+            month: month || 'all',
+            rows,
+            counts: {
+                rows: rows.length,
+                months: new Set(rows.map(row => row.__month_key || '')).size
+            }
+        });
+    } catch (error) {
+        sendJson(res, 502, { error: error.message || 'Management report failed' });
     }
 }
 
@@ -1425,6 +1626,11 @@ async function requestListener(req, res) {
 
     if (pathname === '/api/bootstrap/sync') {
         await handleBootstrapSync(req, res);
+        return;
+    }
+
+    if (pathname === '/api/management-report') {
+        await handleManagementReport(req, res);
         return;
     }
 
@@ -1460,6 +1666,7 @@ if (require.main === module) {
 module.exports = {
     requestListener,
     createServer,
+    assembleBootstrapPayload,
     normalizePhone,
     normalizeBitrixUserId,
     flattenCabinetAccounts,

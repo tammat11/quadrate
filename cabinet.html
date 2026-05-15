@@ -20,10 +20,13 @@
 
     <main class="cabinet-shell">
         <section id="authPanel" class="cabinet-auth-panel">
+            <div class="cabinet-auth-actions">
+                <a class="cabinet-back-link" href="/">Вернуться к дешборду</a>
+            </div>
             <div class="cabinet-brand">
                 <span class="cabinet-brand-kicker">Партнёрский кабинет</span>
                 <h1>Квадрат мечты</h1>
-                <p>Вход по коду из WhatsApp. После входа увидишь только свои баллы, замечания и расшифровку расчёта.</p>
+                <p>Вход по коду из WhatsApp. Дальше откроются только твои показатели и разбор по месяцу.</p>
             </div>
 
             <form id="phoneForm" class="cabinet-form">
@@ -67,11 +70,7 @@
                 <div class="content-block-header">
                     <div class="content-block-title-wrap">
                         <h2>Разбор по критериям</h2>
-                        <p>Здесь видно, какие блоки подняли итог, а какие тянут его вниз в выбранном месяце.</p>
-                    </div>
-                    <div class="cabinet-view-toggle" role="tablist" aria-label="Раздел кабинета">
-                        <button id="detailsTabBtn" class="cabinet-toggle is-active" type="button" role="tab" aria-selected="true">Детали</button>
-                        <button id="managementTabBtn" class="cabinet-toggle" type="button" role="tab" aria-selected="false">Управленка</button>
+                        <p>Сводка по баллу, блокам и деталям расчета.</p>
                     </div>
                 </div>
                 <div id="detailsPane" class="cabinet-pane">
@@ -81,11 +80,11 @@
                 <div id="managementPane" class="cabinet-pane" hidden>
                     <div class="cabinet-placeholder">
                         <h3>Управленка</h3>
-                        <p>Сюда вынесем ручную оценку, комментарии руководителя и историю изменений по месяцу.</p>
+                        <p>Раздел для ручной оценки и комментариев.</p>
                         <div class="cabinet-placeholder-points">
-                            <div class="cabinet-placeholder-point">Ручная оценка по управленке за месяц</div>
-                            <div class="cabinet-placeholder-point">Комментарий, за что балл был поднят или снижен</div>
-                            <div class="cabinet-placeholder-point">История изменений, если оценку корректировали позже</div>
+                            <div class="cabinet-placeholder-point">Итоговая ручная оценка</div>
+                            <div class="cabinet-placeholder-point">Комментарий руководителя</div>
+                            <div class="cabinet-placeholder-point">История правок</div>
                         </div>
                     </div>
                 </div>

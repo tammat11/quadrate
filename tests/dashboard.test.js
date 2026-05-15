@@ -136,6 +136,38 @@ test('getCallsQ считает enum ID Bitrix, а не только тексто
     assert.ok(Math.abs(dashboard.getCallsQ('2362033') - (20 / 21)) < 1e-12);
 });
 
+test('getCallsMetricDetail поясняет формулу расчета обзвона', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1'
+        },
+        deals69: [
+            { UF_CRM_1743669674: 'p1' }
+        ],
+        callsItems: [
+            {
+                UF_CRM_173_PARTNER: 'p1',
+                UF_CRM_173_1771396927: '3',
+                UF_CRM_173_1771397355616: 'Да',
+                UF_CRM_173_1771397383665: 'Нет',
+                UF_CRM_173_1771398284442: 'Да',
+                UF_CRM_173_1771398356499: '2'
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
+    assert.equal(row.details.calls.sub, '11/15');
+    assert.deepEqual(row.details.calls.calcLines, [
+        'Формула: 11 баллов / 5 ответов = 2.2',
+        '2.2 / 3 = 73%'
+    ]);
+});
+
 test('buildIndexes считает дисциплины и берет последний балл управленки за партнера', () => {
     dashboard.applyTestState({
         partnerMap: {
@@ -171,6 +203,174 @@ test('buildIndexes считает дисциплины и берет после�
     assert.equal(dashboard.getDisciplineQ('p2'), 1.0);
     assert.equal(dashboard.getUpravlenkaQ('p1'), 0.8);
     assert.equal(dashboard.getUpravlenkaQ('p2'), 0.5);
+});
+
+test('buildIndexes читает управленку из Marja_full по названию компании', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            'p1': 'Defacto Retail Store Kz TOO',
+            'p2': 'Евразийский Банк АО'
+        },
+        managementItems: [
+            {
+                external_id: 115589,
+                'Название': 'Defacto Retail Store Kz TOO',
+                'Наименовение_компании_1': 'Defacto Retail Store Kz TOO',
+                'Месяц_начисления': '2026-03-31T19:00:00.000Z',
+                'Реализация без НДС': 147442,
+                'Маржа Партнера': 117298,
+                'Расходы ИП': '30144.14',
+                'Маржа': 0.7955525819854821
+            },
+            {
+                external_id: 115590,
+                'Название': 'Defacto Retail Store Kz TOO',
+                'Наименовение_компании_1': 'Defacto Retail Store Kz TOO',
+                'Месяц_начисления': '2026-03-31T19:00:00.000Z',
+                'Реализация без НДС': 100000,
+                'Маржа Партнера': 70000,
+                'Расходы ИП': '30000',
+                'Маржа': 0.7
+            },
+            {
+                external_id: 115591,
+                'Название': 'Евразийский Банк АО',
+                'Наименовение_компании_1': 'Евразийский Банк АО',
+                'Месяц_начисления': '2026-03-31T19:00:00.000Z',
+                'Реализация без НДС': 200000,
+                'Маржа Партнера': 120000,
+                'Расходы ИП': '80000',
+                'Маржа': 0.6
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+
+    assert.equal(dashboard.getUpravlenkaQ('p1'), 0);
+    assert.equal(dashboard.getUpravlenkaQ('p2'), 0);
+    assert.equal(dashboard.getManagementRowsForPartner('p1').length, 2);
+    assert.equal(dashboard.getManagementSummaryForPartner('p1').rowCount, 2);
+    assert.ok(dashboard.getManagementSummaryForPartner('p1').revenueNetSum > 0);
+    assert.ok(Math.abs(dashboard.getManagementSummaryForPartner('p1').marginShare - ((117298 + 70000) / (147442 + 100000))) < 1e-12);
+});
+
+test('buildIndexes считает Marja_full как Power BI: сумма маржи партнера / сумма реализации без НДС', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            'p1': 'Партнер'
+        },
+        managementItems: [
+            {
+                'Ответственное_лицо_ИП_инфо': 'Партнер',
+                'Месяц_начисления': '2026-03-31T19:00:00.000Z',
+                'Реализация без НДС': 1000,
+                'Маржа Партнера': 900,
+                'Маржа': 0.9
+            },
+            {
+                'Ответственное_лицо_ИП_инфо': 'Партнер',
+                'Месяц_начисления': '2026-03-31T19:00:00.000Z',
+                'Реализация без НДС': 9000,
+                'Маржа Партнера': -4500,
+                'Маржа': -0.5
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+
+    assert.equal(dashboard.getManagementSummaryForPartner('p1').rowCount, 2);
+    assert.equal(dashboard.getManagementSummaryForPartner('p1').marginShare, -0.36);
+    assert.equal(dashboard.getManagementSummaryForPartner('p1').managementPoints, 8);
+    assert.equal(dashboard.getUpravlenkaQ('p1'), 0.8);
+});
+
+test('управленка переводит Маржа % в Q по шкале CurrentRate', () => {
+    assert.equal(dashboard.getManagementMarginQ(-0.01), 0.8);
+    assert.equal(dashboard.getManagementMarginQ(0), 0.9);
+    assert.equal(dashboard.getManagementMarginQ(0.04), 0.9);
+    assert.equal(dashboard.getManagementMarginQ(0.0401), 1);
+    assert.equal(dashboard.getManagementMarginQ(0.1199), 1);
+    assert.equal(dashboard.getManagementMarginQ(0.12), 0.7);
+    assert.equal(dashboard.getManagementMarginQ(0.2), 0.5);
+    assert.equal(dashboard.getManagementMarginQ(0.3), 0.3);
+    assert.equal(dashboard.getManagementMarginQ(0.4), 0.1);
+    assert.equal(dashboard.getManagementMarginQ(0.5), 0);
+});
+
+test('buildIndexes связывает Marja_full по ответственному лицу ИП', () => {
+    global.document = {
+        getElementById(id) {
+            if (id === 'monthSelect') return { value: '2026-03' };
+            return null;
+        }
+    };
+
+    dashboard.applyTestState({
+        partnerMap: {
+            'p1': 'Айткулова А.'
+        },
+        managementItems: [
+            {
+                external_id: 705699,
+                'Название': 'Школа Нового Поколения NGS',
+                'Наименовение_компании_1': 'Школа Нового Поколения NGS',
+                'Ответственное_лицо_ИП_инфо': 'Айткулова А.',
+                '__month_key': '2026-03',
+                'Месяц_начисления': '2026-02-28T19:00:00.000Z',
+                'Реализация без НДС': 100000,
+                'Маржа Партнера': 85000,
+                'Расходы ИП': 15000,
+                'Маржа': 0.85
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+
+    assert.equal(dashboard.getManagementRowsForPartner('p1').length, 1);
+    assert.equal(dashboard.getManagementSummaryForPartner('p1').rowCount, 1);
+    assert.equal(dashboard.getManagementSummaryForPartner('p1').managementPoints, 0);
+    assert.equal(dashboard.getUpravlenkaQ('p1'), 0);
+});
+
+test('buildIndexes фильтрует Marja_full строго по Месяц_начисления', () => {
+    global.document = {
+        getElementById(id) {
+            if (id === 'monthSelect') return { value: '2026-03' };
+            return null;
+        }
+    };
+
+    dashboard.applyTestState({
+        partnerMap: {
+            'p1': 'Айткулова А.'
+        },
+        managementItems: [
+            {
+                external_id: 1,
+                'Ответственное_лицо_ИП_инфо': 'Айткулова А.',
+                'Месяц_начисления': '2026-03-31T19:00:00.000Z',
+                'Реализация без НДС': 100000,
+                'Маржа': 0.7
+            },
+            {
+                external_id: 2,
+                'Ответственное_лицо_ИП_инфо': 'Айткулова А.',
+                'Месяц_начисления': '2026-04-01T00:00:00.000Z',
+                period: '2026-03',
+                'Реализация без НДС': 100000,
+                'Маржа': 0.2
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+
+    assert.equal(dashboard.getManagementRowsForPartner('p1').length, 1);
+    assert.equal(dashboard.getManagementSummaryForPartner('p1').managementPoints, 0);
+    assert.equal(dashboard.getUpravlenkaQ('p1'), 0);
 });
 
 test('discipline ручные ограничения режут итоговый Q для конкретных партнеров', () => {
@@ -380,6 +580,39 @@ test('getTrainingQ читает живой bitrix-ключ ufCrm_KASJD12', () =>
     assert.equal(dashboard.getTrainingQ('p1'), 0.85);
 });
 
+test('getTrainingMetricDetail считает прошедших по количеству людей, а не по числу записей', () => {
+    global.document = {
+        getElementById(id) {
+            if (id === 'monthSelect') return { value: '2026-03' };
+            return null;
+        }
+    };
+
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Калиаскар Б.'
+        },
+        deals69: [
+            { UF_CRM_1743669674: 'p1' }
+        ],
+        opuItems: [
+            { UF_CRM_127_1756273714: 'p1', UF_CRM_127_1756290422310: '03', CREATED_TIME: '2026-03-05T10:00:00+03:00', UF_CRM_KASJD12: '7.73', UF_CRM_127_1756291224885: 6 },
+            { UF_CRM_127_1756273714: 'p1', UF_CRM_127_1756290422310: '03', CREATED_TIME: '2026-03-10T10:00:00+03:00', UF_CRM_KASJD12: '8.21', UF_CRM_127_1756291224885: 4 },
+            { UF_CRM_127_1756273714: 'p1', UF_CRM_127_1756290422310: '03', CREATED_TIME: '2026-03-15T10:00:00+03:00', UF_CRM_KASJD12: '9.67', UF_CRM_127_1756291224885: 10 },
+            { UF_CRM_127_1756273714: 'p1', UF_CRM_127_1756290422310: '03', CREATED_TIME: '2026-03-20T10:00:00+03:00', UF_CRM_KASJD12: '4.63', UF_CRM_127_1756291224885: 4 }
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
+    assert.ok(row);
+    assert.equal(row.details.training.sub, '24 прошли');
+    assert.equal(row.details.training.title.includes('Прошли обучение: 24'), true);
+});
+
 test('getTrainingQ без данных ставит дефолт 40%', () => {
     dashboard.applyTestState({
         partnerMap: {
@@ -393,11 +626,14 @@ test('getTrainingQ без данных ставит дефолт 40%', () => {
 
     dashboard.buildIndexes();
     dashboard.processData();
+    dashboard.applyTestState({
+        bitrixPortalBase: 'https://portal.example.bitrix24.kz'
+    });
     dashboard.buildMatrixRows();
 
     assert.equal(dashboard.getTrainingQ('p1'), 0.4);
     const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
-    assert.equal(row.details.training.sub, '4/10 (нет данных)');
+    assert.equal(row.details.training.sub, '0 прошли');
 });
 
 test('getRealizationQ считает ФОТ как выплаты людям к 60% суммы договоров', () => {
@@ -476,6 +712,9 @@ test('getRealizationQ зажимает ФОТ на 100%, а в деталях п
 
     dashboard.buildIndexes();
     dashboard.processData();
+    dashboard.applyTestState({
+        bitrixPortalBase: 'https://portal.example.bitrix24.kz'
+    });
     dashboard.buildMatrixRows();
 
     const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === '3421309');
@@ -703,6 +942,9 @@ test('audit не штрафует итог, пока временно обнул
 
     dashboard.buildIndexes();
     dashboard.processData();
+    dashboard.applyTestState({
+        bitrixPortalBase: 'https://portal.example.bitrix24.kz'
+    });
     dashboard.buildMatrixRows();
 
     const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
@@ -840,8 +1082,8 @@ test('buildClocksterMetrics не удваивает визит на одном �
         }
     ]);
 
-    assert.deepEqual(metrics['3370865'], { visits: 1, hours: 9, uniqueObjects: 1, objectIds: ['obj-1'] });
-    assert.deepEqual(metrics['2361999'], { visits: 3, hours: 10, uniqueObjects: 2, objectIds: ['obj-2', 'obj-3'] });
+    assert.deepEqual(metrics['3370865'], { visits: 1, hours: 9, uniqueObjects: 1, objectIds: ['obj-1'], locationKeys: ['obj1'] });
+    assert.deepEqual(metrics['2361999'], { visits: 3, hours: 10, uniqueObjects: 2, objectIds: ['obj-2', 'obj-3'], locationKeys: ['obj2', 'obj3'] });
 });
 
 test('getClocksterQ для обычных партнеров считает дедуп по Адрес+Дата, а для особых часы', () => {
@@ -882,6 +1124,144 @@ test('getClocksterQ возвращает 0, если объекты есть, а
     });
 
     assert.equal(dashboard.getClocksterQ('p1'), 0);
+});
+
+test('в Clockster кабинета выводится список не посещённых объектов за месяц', () => {
+    global.document = {
+        getElementById(id) {
+            if (id === 'monthSelect') return { value: '2026-03' };
+            return null;
+        }
+    };
+
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1'
+        },
+        bitrixPortalBase: 'https://portal.example.bitrix24.kz',
+        deals69: [
+            {
+                ID: 'd1',
+                UF_CRM_1743669674: 'p1',
+                TITLE: 'Alpha Market',
+                UF_CRM_ACTIVE_ADDRESS: 'Кунаева 1',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00'
+            },
+            {
+                ID: 'd2',
+                UF_CRM_1743669674: 'p1',
+                TITLE: 'Bravo Store',
+                UF_CRM_ACTIVE_ADDRESS: 'Толе би 2',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00'
+            }
+        ],
+        clocksterMetricsByPartner: {
+            p1: {
+                visits: 1,
+                hours: 1,
+                uniqueObjects: 1,
+                objectIds: ['alpha market'],
+                locationKeys: ['alpha market']
+            }
+        }
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
+    assert.ok(row);
+    assert.equal(row.breakdown.clockster.missedObjects.length, 1);
+    assert.equal(row.breakdown.clockster.missedObjects[0].label, 'Bravo Store');
+    assert.equal(row.breakdown.clockster.missedObjects[0].url, 'https://portal.example.bitrix24.kz/crm/deal/details/d2/');
+});
+
+test('Clockster подхватывает название компании, если заголовок объекта пустой или служебный', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1'
+        },
+        bitrixPortalBase: 'https://portal.example.bitrix24.kz',
+        companyMap: {
+            c1: 'ТОО "Гидробаланс"'
+        },
+        deals69: [
+            {
+                ID: 'd1',
+                UF_CRM_1743669674: 'p1',
+                COMPANY_ID: 'c1',
+                TITLE: 'Объект 702655',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00'
+            }
+        ],
+        clocksterMetricsByPartner: {
+            p1: {
+                visits: 0,
+                hours: 0,
+                uniqueObjects: 0,
+                objectIds: [],
+                locationKeys: []
+            }
+        }
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
+    assert.ok(row);
+    assert.equal(row.breakdown.clockster.missedObjects[0].label, 'ТОО "Гидробаланс"');
+});
+
+test('Clockster различает адреса, даже если у объектов одна компания', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1'
+        },
+        bitrixPortalBase: 'https://portal.example.bitrix24.kz',
+        companyMap: {
+            c1: 'ТОО "Гидробаланс"'
+        },
+        deals69: [
+            {
+                ID: 'd1',
+                UF_CRM_1743669674: 'p1',
+                COMPANY_ID: 'c1',
+                TITLE: 'Объект 702655',
+                UF_CRM_ACTIVE_ADDRESS: 'Кунаева 1',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00'
+            },
+            {
+                ID: 'd2',
+                UF_CRM_1743669674: 'p1',
+                COMPANY_ID: 'c1',
+                TITLE: 'Объект 302655',
+                UF_CRM_ACTIVE_ADDRESS: 'Толе би 2',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00'
+            }
+        ],
+        clocksterMetricsByPartner: {
+            p1: {
+                visits: 1,
+                hours: 1,
+                uniqueObjects: 1,
+                objectIds: ['кунаева1'],
+                locationKeys: ['кунаева1']
+            }
+        }
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
+    assert.ok(row);
+    assert.equal(row.breakdown.clockster.missedObjects.length, 1);
+    assert.equal(row.breakdown.clockster.missedObjects[0].label, 'Толе би 2');
+    assert.equal(row.breakdown.clockster.missedObjects[0].url, 'https://portal.example.bitrix24.kz/crm/deal/details/d2/');
 });
 
 test('ФОТ без договоров отображается как тире, а УМС/РМ считается как 100%', () => {
@@ -1040,6 +1420,10 @@ test('положительные отзывы не учитываются в з�
         partnerMap: {
             p1: 'Партнер 1'
         },
+        bitrixPortalBase: 'https://portal.example.bitrix24.kz',
+        companyMap: {
+            c1: 'ТОО "Гидробаланс"'
+        },
         deals69: [
             { ID: 'd1', UF_CRM_1743669674: 'p1', UF_CRM_1707724024179: '100' }
         ],
@@ -1087,6 +1471,7 @@ test('просроченные замечания в кабинете показ
         partnerMap: {
             p1: 'Партнер 1'
         },
+        bitrixPortalBase: 'https://portal.example.bitrix24.kz',
         deals69: [
             { ID: 'd1', UF_CRM_1743669674: 'p1', UF_CRM_1707724024179: '100' }
         ],
@@ -1110,6 +1495,68 @@ test('просроченные замечания в кабинете показ
     const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
     assert.ok(row);
     assert.equal(row.breakdown.remarks.items[0].label, '«Magnum Cash&Carry» ТООАстана');
+    assert.equal(row.breakdown.remarks.items[0].url, 'https://portal.example.bitrix24.kz/crm/deal/details/109999/');
+});
+
+test('кабинетные замечания не показывают технические поля, а обзвон ведет на crm.item', () => {
+    global.document = {
+        getElementById(id) {
+            if (id === 'monthSelect') return { value: '2026-03' };
+            return null;
+        }
+    };
+
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер 1'
+        },
+        bitrixPortalBase: 'https://portal.example.bitrix24.kz',
+        deals69: [
+            { ID: 'd1', UF_CRM_1743669674: 'p1', UF_CRM_1707724024179: '100' }
+        ],
+        remarkDeals: [
+            {
+                ID: '109999',
+                TITLE: '«Magnum Cash&Carry» ТООАстана',
+                UF_CRM_1743669674: 'p1',
+                DATE_CREATE: '2026-03-10T10:00:00+03:00',
+                UF_CRM_REVIEWDATE: '2026-03-10',
+                UF_CRM_FITBACK: '2026-03-15',
+                UF_CRM_1719824872888: '43607'
+            }
+        ],
+        callsItems: [
+            {
+                ID: '777',
+                ufCrm173Partner: 'p1',
+                companyId: 'c1',
+                ufCrm173_1771396870: 'ул. Бегалина 68',
+                ufCrm1731775114484085: '2026-03-05T10:00:00+03:00',
+                ufCrm173_1771396927: 141219,
+                ufCrm173_1771397355616: 141221,
+                ufCrm173_1771398284442: 0,
+                ufCrm173_1771400416684: 'Айдана, 8747 822 26 01'
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
+    assert.ok(row);
+    assert.equal(row.breakdown.remarks.lines.some(line => line.includes('Штраф до послабления')), false);
+    assert.equal(row.breakdown.remarks.lines.some(line => line.includes('Послабление за объём замечаний')), false);
+    assert.equal(row.breakdown.calls.items[0].url, 'https://portal.example.bitrix24.kz/crm/type/1364/details/777/');
+    assert.equal(row.breakdown.calls.items[0].answers[0].label, 'Оцените работу вашего куратора от 1-3');
+    assert.equal(row.breakdown.calls.items[0].answers[0].displayValue, '3');
+    assert.equal(row.breakdown.calls.items[0].fields.find(field => field.field === 'ufCrm173_1771398284442')?.displayValue, 'нет ответа');
+    assert.equal(row.breakdown.calls.items[0].fields.find(field => field.field === 'ufCrm173_1771396870')?.displayValue, 'ул. Бегалина 68');
+    assert.equal(row.breakdown.calls.items[0].fields.some(field => field.label === 'Должность'), false);
+    assert.equal(row.breakdown.calls.items[0].fields.some(field => field.label === 'Вид уборки'), false);
+    assert.equal(row.breakdown.calls.items[0].fields.some(field => field.label === 'Дата планерки'), false);
+    assert.equal(row.breakdown.calls.items[0].fields.some(field => field.label === 'Ссылка на отработку замечаний'), false);
 });
 
 test('в количество замечаний попадают только отрицательные источники, без CSI и пустых', () => {

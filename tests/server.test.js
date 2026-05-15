@@ -61,3 +61,26 @@ test('flattenCabinetAccounts и groupCabinetAccounts сохраняют стру
         ]
     });
 });
+
+test('assembleBootstrapPayload не теряет сделки из 79 в bootstrap-снапшоте', () => {
+    const payload = server.assembleBootstrapPayload({
+        partnerMap: { p1: 'Партнер 1' },
+        companyMap: { c1: 'Компания 1' },
+        list115PartnerByElementId: { ref1: 'p1' },
+        lastUserMap: { u1: 'Юзер 1' },
+        accountCoefficientRows: [{ employee: 'u1' }],
+        deals69: [{ ID: '69-1' }],
+        deals79: [{ ID: '79-1' }, { ID: '79-2' }],
+        remarkDeals: [{ ID: '81-1' }],
+        callsItems: [{ id: 'call-1' }],
+        disciplineItems: [{ id: 'disc-1' }],
+        opuItems: [{ id: 'opu-1' }],
+        managementItems: [{ id: 'mgmt-1' }],
+        fotDbItems: [{ id: 'fot-1' }]
+    });
+
+    assert.deepEqual(payload.deals79, [{ ID: '79-1' }, { ID: '79-2' }]);
+    assert.equal(payload.counts.deals69, 1);
+    assert.equal(payload.counts.deals79, 2);
+    assert.equal(payload.counts.remarks81, 1);
+});

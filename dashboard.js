@@ -20,6 +20,7 @@ const FIELDS = {
     OPU_MONTH: 'UF_CRM_127_1756272780',
     OPU_MONTH_NUMBER: 'UF_CRM_127_1756290422310',
     AREA: 'UF_CRM_1707724024179',
+    OPU_PASSED_COUNT: 'UF_CRM_127_1756291224885',
     OPU_AVERAGE_SUM: 'UF_CRM_KASJD12',
     MGMT_SCORE: 'UF_CRM_127_MGMT_SCORE'
 };
@@ -114,6 +115,30 @@ const CALLS_SCORE_FIELDS = [
         map: { '1': 1, '2': 2, '3': 3, '141233': 1, '141235': 2, '141237': 3 }
     }
 ];
+const CALLS_FIELD_LABELS = {
+    UF_CRM_173_1771396927: 'Оцените работу вашего куратора от 1-3',
+    UF_CRM_173_1771397355616: 'Все ли вас устраивает в сроках и качестве предостовляемого моющих средств и РМ?',
+    UF_CRM_173_1771397383665: 'ОПУ на объекте находятся в форме?',
+    UF_CRM_173_1771398284442: 'Соблюдается ли график работы ОПУ?',
+    UF_CRM_173_1771398356499: 'Устраивает ли вас качество уборки? оцените от 1-3'
+};
+const CALLS_DETAIL_FIELD_DEFS = [
+    { field: 'ufCrm173_1771396870', label: 'Адрес объекта' },
+    { field: 'ufCrm173_1771400136', label: 'Компания', kind: 'company' },
+    { field: 'ufCrm173_1771400416684', label: 'Контакт' },
+    { field: 'UF_CRM_173_1775114484085', label: 'Дата обзвона', kind: 'date' },
+    { field: 'ufCrm173_1771396927', label: CALLS_FIELD_LABELS.UF_CRM_173_1771396927, map: CALLS_SCORE_FIELDS[0].map },
+    { field: 'ufCrm173_1771396982', label: 'Комментарий если оценка ниже 3' },
+    { field: 'ufCrm173_1771397355616', label: CALLS_FIELD_LABELS.UF_CRM_173_1771397355616, map: CALLS_SCORE_FIELDS[1].map },
+    { field: 'ufCrm173_1771397364448', label: 'Комментарий в случае ответа нет' },
+    { field: 'ufCrm173_1771397383665', label: CALLS_FIELD_LABELS.UF_CRM_173_1771397383665, map: CALLS_SCORE_FIELDS[2].map },
+    { field: 'ufCrm173_1771398284442', label: CALLS_FIELD_LABELS.UF_CRM_173_1771398284442, map: CALLS_SCORE_FIELDS[3].map },
+    { field: 'ufCrm173_1771398356499', label: CALLS_FIELD_LABELS.UF_CRM_173_1771398356499, map: CALLS_SCORE_FIELDS[4].map },
+    { field: 'ufCrm173_1771398408127', label: 'Комментарий в случае, если оценка ниже 3' },
+    { field: 'ufCrm173_1771398445397', label: 'Комментарий по ген.уборкам' },
+    { field: 'ufCrm173_1771398469930', label: 'Общий комментарий по объекту' },
+    { field: 'ufCrm173_1771398516363', label: 'Обратная связь повторная' }
+];
 
 const LIST_PARTNERS_IBLOCK_ID = 117;
 const LIST_CALLS_REF_IBLOCK_ID = 115;
@@ -188,7 +213,7 @@ const HIDDEN_COMPLEXITY_BOOSTS = {
     '2362027': { area: 0.05, opu: 0.05 }  // Нысанбеков Е.
 };
 
-const CACHE_KEY = 'dashboardCacheV4';
+const CACHE_KEY = 'dashboardCacheV5';
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 часа
 
 // ——— Глобальное состояние ———
@@ -200,6 +225,9 @@ let disciplineItems = [];
 let opuItems = [];
 let managementItems = [];
 let fotDbItems = [];
+let managementRowsByPartner = {};
+let managementSummaryByPartner = {};
+let managementPartnerLookup = {};
 let partnersData = {};
 let matrixRows = [];
 let partnerMap = {};
@@ -765,6 +793,32 @@ function buildAuditCounts(selectedMonth) {
     return counts;
 }
 
+function buildAuditItems(pid, selectedMonth) {
+    const items = [];
+
+    for (const deal of remarkDeals) {
+        if (!isAuditRemarkSource(getFieldValue(deal, FIELDS.REMARK_SOURCE))) continue;
+
+        const reportMonth = getAuditReportMonth(deal);
+        if (!doesMonthMatchSelection(reportMonth, selectedMonth)) continue;
+        if (normalizePartnerId(deal) !== pid) continue;
+
+        const id = String(getFieldValue(deal, 'ID') ?? deal?.ID ?? '').trim();
+        items.push({
+            id,
+            label: normalizeScalar(getFieldValue(deal, 'TITLE')) || 'Аудит',
+            url: buildBitrixDealUrl(id),
+            remarkDate: normalizeScalar(getFieldValue(deal, FIELDS.REMARK_DATE)) || normalizeScalar(getFieldValue(deal, 'DATE_CREATE')) || '',
+            feedbackDate: normalizeScalar(getFieldValue(deal, FIELDS.FEEDBACK_DATE)) || '',
+            lateDays: null,
+            penalty: 0,
+            status: 'Аудит'
+        });
+    }
+
+    return items;
+}
+
 function normalizeBitrixFieldName(fieldName) {
     if (!fieldName) return fieldName;
     if (/^[a-z]/.test(fieldName)) return fieldName;
@@ -882,6 +936,16 @@ async function fetchBootstrapData(forceRefresh = false) {
     const response = await fetch(url, { cache: 'no-store' });
     if (!response.ok) {
         throw new Error(`Bootstrap HTTP ${response.status}`);
+    }
+    return response.json();
+}
+
+async function fetchManagementReport(monthKey = getSelectedMonth()) {
+    const params = new URLSearchParams();
+    if (monthKey) params.set('month', monthKey);
+    const response = await fetch(`/api/management-report?${params.toString()}`, { cache: 'no-store' });
+    if (!response.ok) {
+        throw new Error(`Management report HTTP ${response.status}`);
     }
     return response.json();
 }
@@ -1371,7 +1435,8 @@ function mergeClocksterMetrics(metricList) {
                 merged[partnerId] = {
                     visits: 0,
                     hours: 0,
-                    uniqueObjectsSet: new Set()
+                    uniqueObjectsSet: new Set(),
+                    locationKeysSet: new Set()
                 };
             }
 
@@ -1382,6 +1447,11 @@ function mergeClocksterMetrics(metricList) {
             for (const objectId of objectIds) {
                 merged[partnerId].uniqueObjectsSet.add(String(objectId));
             }
+
+            const locationKeys = Array.isArray(metric.locationKeys) ? metric.locationKeys : [];
+            for (const locationKey of locationKeys) {
+                merged[partnerId].locationKeysSet.add(String(locationKey));
+            }
         }
     }
 
@@ -1391,11 +1461,19 @@ function mergeClocksterMetrics(metricList) {
             visits: metric.visits,
             hours: metric.hours,
             uniqueObjects: metric.uniqueObjectsSet.size,
-            objectIds: [...metric.uniqueObjectsSet]
+            objectIds: [...metric.uniqueObjectsSet],
+            locationKeys: [...metric.locationKeysSet]
         };
     }
 
     return normalized;
+}
+
+function normalizeClocksterLocationKey(value) {
+    return String(normalizeScalar(value) ?? '')
+        .toLowerCase()
+        .replace(/ё/g, 'е')
+        .replace(/[^a-z0-9а-я]+/gi, '');
 }
 
 function buildClocksterMetrics(reportRows) {
@@ -1412,6 +1490,7 @@ function buildClocksterMetrics(reportRows) {
         let uniqueObjectVisits = 0;
         let spentHours = 0;
         const uniqueCoveredObjects = new Set();
+        const visitedLocationKeys = new Set();
         const dates = row?.dates || {};
 
         for (const [dateKey, dateData] of Object.entries(dates)) {
@@ -1434,6 +1513,11 @@ function buildClocksterMetrics(reportRows) {
 
                 uniqueObjectVisits += 1;
                 uniqueCoveredObjects.add(String(locationKey.split('|').slice(1).join('|')));
+                const firstEvent = events.find(Boolean) || null;
+                const locationId = firstEvent?.location?.id ?? '';
+                const locationTitle = firstEvent?.location?.title ?? '';
+                if (locationId) visitedLocationKeys.add(normalizeClocksterLocationKey(locationId));
+                if (locationTitle) visitedLocationKeys.add(normalizeClocksterLocationKey(locationTitle));
 
                 const firstIn = events.find(e => Number(e?.status) === 1 && e?.datetime);
                 const reversed = [...events].reverse();
@@ -1453,11 +1537,219 @@ function buildClocksterMetrics(reportRows) {
             visits: uniqueObjectVisits,
             hours: spentHours,
             uniqueObjects: uniqueCoveredObjects.size,
-            objectIds: [...uniqueCoveredObjects]
+            objectIds: [...uniqueCoveredObjects],
+            locationKeys: [...visitedLocationKeys]
         };
     }
 
     return metrics;
+}
+
+function getDealClocksterObjectLabels(deal) {
+    const display = getClocksterObjectDisplay(deal);
+    const labels = [display.label];
+    if (display.sublabel) labels.push(display.sublabel);
+    return labels;
+}
+
+function getDealClocksterMatchKeys(deal) {
+    const title = normalizeScalar(getFieldValue(deal, 'TITLE'));
+    const address = normalizeScalar(getFieldValue(deal, 'UF_CRM_ACTIVE_ADDRESS'));
+    const companyId = normalizeScalar(getFieldValue(deal, 'COMPANY_ID'));
+    const companyTitle = companyId ? String(companyMap[String(companyId)] || '').trim() : '';
+    const id = String(getFieldValue(deal, 'ID') ?? deal?.ID ?? '').trim();
+
+    return [
+        address,
+        title && !isGenericClocksterTitle(title) ? title : '',
+        companyTitle && !isGenericClocksterTitle(companyTitle) ? companyTitle : '',
+        id
+    ].filter(Boolean);
+}
+
+function isGenericClocksterTitle(value) {
+    const text = String(normalizeScalar(value) ?? '').trim();
+    if (!text) return true;
+    if (/^bitrix\s*#?\s*\d+$/i.test(text)) return true;
+    if (/^объект\s*\d+$/i.test(text)) return true;
+    if (/^\d+$/.test(text)) return true;
+    return false;
+}
+
+function getCallsItemTitle(item) {
+    const title = normalizeScalar(getFieldValue(item, 'TITLE'));
+    const subject = normalizeScalar(getFieldValue(item, 'SUBJECT'));
+    const name = normalizeScalar(getFieldValue(item, 'NAME'));
+    const id = String(getFieldValue(item, 'ID') ?? item?.ID ?? '').trim();
+    return String(title || subject || name || (id ? `Обзвон ${id}` : 'Обзвон')).trim();
+}
+
+function getCallsAnswerDisplayValue(rawValue, scoreMap = null) {
+    const value = normalizeScalar(rawValue);
+    if (value == null || value === '') return 'не заполнено';
+    if (Array.isArray(value)) {
+        return value
+            .map(entry => getCallsAnswerDisplayValue(entry, scoreMap))
+            .filter(Boolean)
+            .join(', ') || 'не заполнено';
+    }
+    const text = String(value).trim();
+    if (text === '0') return 'нет ответа';
+    if (scoreMap && Object.hasOwn(scoreMap, text)) {
+        const mapped = scoreMap[text];
+        return Number(mapped) === 0 ? 'нет ответа' : String(mapped);
+    }
+    return text;
+}
+
+function formatDashboardDate(value) {
+    if (!value) return 'не заполнено';
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return String(value);
+    return new Intl.DateTimeFormat('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+    }).format(date);
+}
+
+function getCallsDetailDisplayValue(item, def) {
+    const rawValue = getFieldValue(item, def.field);
+    const value = normalizeScalar(rawValue);
+    if (def.kind === 'date') return formatDashboardDate(value);
+    if (def.kind === 'company') {
+        const valueText = value == null ? '' : String(value).trim();
+        const fallbackCompanyId = String(item?.companyId ?? item?.companyID ?? '').trim();
+        const companyId = valueText && valueText !== 'undefined' ? valueText : fallbackCompanyId;
+        return companyMap[companyId] || companyMap[fallbackCompanyId] || 'не заполнено';
+    }
+    if (def.kind === 'enum') {
+        const values = Array.isArray(value) ? value : [value];
+        const mapped = values
+            .map(entry => def.enumMap?.[String(entry).trim()] || String(entry).trim())
+            .filter(Boolean);
+        return mapped.length ? mapped.join(', ') : 'не заполнено';
+    }
+    if (def.kind === 'url') return String(value).trim();
+    if (value == null || value === '') return 'не заполнено';
+    if (def.map) return getCallsAnswerDisplayValue(value, def.map);
+    if (Array.isArray(value)) return value.map(entry => String(entry).trim()).filter(Boolean).join(', ') || 'не заполнено';
+    return String(value).trim() || 'не заполнено';
+}
+
+function getClocksterObjectDisplay(deal) {
+    const title = normalizeScalar(getFieldValue(deal, 'TITLE'));
+    const address = normalizeScalar(getFieldValue(deal, 'UF_CRM_ACTIVE_ADDRESS'));
+    const companyId = normalizeScalar(getFieldValue(deal, 'COMPANY_ID'));
+    const companyTitle = companyId ? String(companyMap[String(companyId)] || '').trim() : '';
+    const fallbackId = String(getFieldValue(deal, 'ID') ?? deal?.ID ?? '').trim();
+
+    if (title && !isGenericClocksterTitle(title)) {
+        return {
+            label: String(title),
+            sublabel: [address, companyTitle].find(value => value && value !== title) || ''
+        };
+    }
+
+    if (address) {
+        return {
+            label: String(address),
+            sublabel: [title, companyTitle].find(value => value && value !== address) || ''
+        };
+    }
+
+    if (companyTitle) {
+        return {
+            label: companyTitle,
+            sublabel: title && title !== companyTitle ? String(title) : ''
+        };
+    }
+
+    if (title) {
+        return { label: String(title), sublabel: '' };
+    }
+
+    return { label: fallbackId ? `Объект ${fallbackId}` : 'Объект', sublabel: '' };
+}
+
+function getCallsItemDate(item) {
+    return normalizeScalar(getFieldValue(item, FIELDS.CALLS_DATE))
+        || normalizeScalar(getFieldValue(item, 'DATE_CREATE'))
+        || normalizeScalar(getFieldValue(item, 'CREATED_TIME'))
+        || '';
+}
+
+function describeCallsItem(item) {
+    const fields = CALLS_DETAIL_FIELD_DEFS.map(def => {
+        const displayValue = getCallsDetailDisplayValue(item, def);
+        return {
+            field: def.field,
+            label: def.label,
+            displayValue,
+            kind: def.kind || '',
+            url: def.kind === 'url' ? displayValue : ''
+        };
+    }).filter(field => field.displayValue && field.displayValue !== 'не заполнено');
+
+    const answers = CALLS_SCORE_FIELDS.map(config => {
+        const rawValue = getFieldValue(item, config.field);
+        const score = scoreCallsFieldValue(rawValue, config.map);
+        return {
+            label: CALLS_FIELD_LABELS[config.field] || config.field,
+            value: normalizeScalar(rawValue),
+            score,
+            displayValue: getCallsAnswerDisplayValue(rawValue, config.map)
+        };
+    }).filter(answer => answer.value != null && answer.value !== '');
+    const scoredAnswers = answers.filter(answer => Number.isFinite(answer.score));
+    const totalScore = scoredAnswers.reduce((sum, answer) => sum + (Number(answer.score) || 0), 0);
+    const maxScore = scoredAnswers.length * 3;
+    const answerCount = scoredAnswers.length;
+    const id = String(getFieldValue(item, 'ID') ?? item?.ID ?? '').trim();
+    return {
+        id,
+        label: getCallsItemTitle(item),
+        date: getCallsItemDate(item),
+        url: buildBitrixItemUrl(ENTITY_CALLS, id),
+        answerCount,
+        totalScore,
+        maxScore,
+        q: maxScore > 0 ? totalScore / maxScore : null,
+        answers,
+        fields
+    };
+}
+
+function buildClocksterMissedObjects(pid, rowData = null) {
+    const selectedMonth = getSelectedMonth();
+    const metric = clocksterMetricsByPartner[String(pid)] || null;
+    const visitedKeys = new Set(
+        (metric?.locationKeys || metric?.objectIds || [])
+            .map(value => normalizeClocksterLocationKey(value))
+            .filter(Boolean)
+    );
+    const missed = [];
+
+    for (const deal of deals69) {
+        if (normalizePartnerId(deal) !== pid) continue;
+        const dealMonth = extractDealMonthKey(deal, [FIELDS.MONTH_ACCRUAL, 'DATE_CREATE', 'CLOSEDATE', 'MOVED_TIME']);
+        if (!doesMonthMatchSelection(dealMonth, selectedMonth)) continue;
+
+        const display = getClocksterObjectDisplay(deal);
+        const normalizedLabels = getDealClocksterMatchKeys(deal).map(normalizeClocksterLocationKey).filter(Boolean);
+        const matched = normalizedLabels.some(label => visitedKeys.has(label));
+        if (matched) continue;
+        missed.push({
+            id: String(getFieldValue(deal, 'ID') ?? deal?.ID ?? ''),
+            label: display.label,
+            sublabel: display.sublabel,
+            url: buildBitrixDealUrl(getFieldValue(deal, 'ID') ?? deal?.ID ?? ''),
+            status: 'Не был посещён'
+        });
+    }
+
+    missed.sort((a, b) => String(a.label).localeCompare(String(b.label), 'ru'));
+    return missed;
 }
 
 async function refreshClocksterMetrics() {
@@ -1486,6 +1778,60 @@ async function refreshClocksterMetrics() {
         console.warn('Clockster metrics fetch failed', error);
         clocksterMetricsByPartner = {};
     }
+}
+
+function getManagementMonthKey(item) {
+    // __month_key is generated by the API from Marja_full.`Месяц_начисления`.
+    const raw = getFieldValue(item, '__month_key')
+        || getFieldValue(item, 'Месяц_начисления');
+    if (raw instanceof Date) return formatMonthKey(raw);
+    return normalizeMonthKeyValue(raw);
+}
+
+function buildManagementPartnerLookup() {
+    managementPartnerLookup = {};
+    for (const [pid, name] of Object.entries(partnerMap || {})) {
+        const normalized = normalizeComparableName(name);
+        if (!normalized) continue;
+        if (!managementPartnerLookup[normalized]) {
+            managementPartnerLookup[normalized] = String(pid);
+        }
+    }
+}
+
+function getManagementPartnerId(item) {
+    const direct = normalizePartnerRef(getFieldValue(item, FIELDS.OPU_PARTNER));
+    if (direct) return direct;
+
+    const candidateNames = [
+        getFieldValue(item, 'Ответственное_лицо_ИП_инфо'),
+        getFieldValue(item, 'Наименовение_компании_1'),
+        getFieldValue(item, 'Название'),
+        getFieldValue(item, 'Наименование_ИП_инфо'),
+        getFieldValue(item, 'ФИО_1')
+    ];
+    for (const candidate of candidateNames) {
+        const pid = managementPartnerLookup[normalizeComparableName(candidate)];
+        if (pid) return pid;
+    }
+    return '';
+}
+
+function getManagementMarginPoints(marginRate) {
+    const value = Number(marginRate);
+    if (!Number.isFinite(value)) return 0;
+    if (value < 0) return 8;
+    if (value <= 0.04) return 9;
+    if (value < 0.12) return 10;
+    if (value < 0.20) return 7;
+    if (value < 0.30) return 5;
+    if (value < 0.40) return 3;
+    if (value < 0.50) return 1;
+    return 0;
+}
+
+function getManagementMarginQ(marginRate) {
+    return getManagementMarginPoints(marginRate) / 10;
 }
 
 // ——— Построение индексов для Q-функций ———
@@ -1556,21 +1902,117 @@ function buildIndexes() {
         }
     }
 
+    buildManagementPartnerLookup();
     managementScoresByPartner = {};
+    managementRowsByPartner = {};
+    managementSummaryByPartner = {};
     for (const item of managementItems) {
-        const pid = normalizePartnerRef(getFieldValue(item, FIELDS.OPU_PARTNER));
+        const hasLegacyFields = Boolean(getFieldValue(item, FIELDS.OPU_PARTNER) || getFieldValue(item, FIELDS.MGMT_SCORE));
+        const pid = hasLegacyFields
+            ? normalizePartnerRef(getFieldValue(item, FIELDS.OPU_PARTNER))
+            : getManagementPartnerId(item);
         if (!pid) continue;
 
-        const itemMonth = extractDealMonthKey(item, [FIELDS.OPU_MONTH, 'CREATED_TIME', 'UPDATED_TIME']);
+        const itemMonth = hasLegacyFields
+            ? extractDealMonthKey(item, [FIELDS.OPU_MONTH, 'CREATED_TIME', 'UPDATED_TIME'])
+            : getManagementMonthKey(item);
         if (!doesMonthMatchSelection(itemMonth, selectedMonth)) continue;
 
-        const score = parseFloat(getFieldValue(item, FIELDS.MGMT_SCORE));
-        if (Number.isNaN(score)) continue;
+        const legacyScore = parseFloat(getFieldValue(item, FIELDS.MGMT_SCORE));
+        const rawScore = hasLegacyFields ? legacyScore : parseFloat(getFieldValue(item, 'Маржа'));
+        if (Number.isNaN(rawScore)) continue;
+        const marginScore = Math.max(0, Math.min(1, Number(rawScore) || 0));
+        const revenueNetValue = getFieldValue(item, 'Реализация без НДС');
+        const partnerMarginValue = getFieldValue(item, 'Маржа Партнера');
+        const hasWeightedMarginFields = !hasLegacyFields
+            && revenueNetValue !== null
+            && revenueNetValue !== undefined
+            && revenueNetValue !== ''
+            && partnerMarginValue !== null
+            && partnerMarginValue !== undefined
+            && partnerMarginValue !== '';
 
-        const updatedAt = normalizeScalar(getFieldValue(item, 'UPDATED_TIME')) || normalizeScalar(getFieldValue(item, 'CREATED_TIME')) || '';
-        const current = managementScoresByPartner[pid];
-        if (!current || String(updatedAt) > String(current.updatedAt || '')) {
-            managementScoresByPartner[pid] = { score: Math.max(0, Math.min(1, score)), updatedAt };
+        const normalizedRow = {
+            id: String(getFieldValue(item, 'external_id') ?? getFieldValue(item, 'EXTERNAL_ID') ?? `${pid}-${managementRowsByPartner[pid]?.length || 0}`),
+            partnerId: pid,
+            partnerName: partnerMap[pid] || '',
+            monthKey: itemMonth || '',
+            monthLabel: itemMonth ? formatMonthLabel(itemMonth) : '',
+            title: normalizeScalar(getFieldValue(item, 'Название')) || '',
+            funnelNumber: normalizeScalar(getFieldValue(item, 'Номер_воронки')) || '',
+            funnelName: normalizeScalar(getFieldValue(item, 'Наименовение_воронки')) || '',
+            stageName: normalizeScalar(getFieldValue(item, 'Наименование_стадии')) || '',
+            ipName: normalizeScalar(getFieldValue(item, 'Наименование_ИП_инфо')) || '',
+            responsibleName: normalizeScalar(getFieldValue(item, 'Ответственное_лицо_ИП_инфо')) || '',
+            address: normalizeScalar(getFieldValue(item, 'Адрес_объекта_инфо')) || '',
+            addressId: normalizeScalar(getFieldValue(item, 'Адрес_объекта_инфо_ID')) || '',
+            bin: normalizeScalar(getFieldValue(item, 'BIN_партнера')) || '',
+            companyName: normalizeScalar(getFieldValue(item, 'Наименовение_компании_1')) || '',
+            fio: normalizeScalar(getFieldValue(item, 'ФИО_1')) || '',
+            revenueGross: Number(getFieldValue(item, 'Реализация с НДС')) || 0,
+            vat: Number(getFieldValue(item, 'НДС')) || 0,
+            revenueNet: Number(revenueNetValue) || 0,
+            fotTotal: Number(getFieldValue(item, 'ИТОГО ФОТ')) || 0,
+            umsTotal: Number(getFieldValue(item, 'ИТОГО УМС')) || 0,
+            partnerMargin: Number(partnerMarginValue) || 0,
+            margin: marginScore,
+            rawMargin: Number(rawScore) || 0,
+            hasWeightedMarginFields,
+            expenseIp: Number(getFieldValue(item, 'Расходы ИП')) || 0,
+            raw: item
+        };
+
+        if (!managementRowsByPartner[pid]) managementRowsByPartner[pid] = [];
+        managementRowsByPartner[pid].push(normalizedRow);
+
+        if (!managementSummaryByPartner[pid]) {
+            managementSummaryByPartner[pid] = {
+                rowCount: 0,
+                marginSum: 0,
+                rawMarginSum: 0,
+                revenueGrossSum: 0,
+                revenueNetSum: 0,
+                partnerMarginSum: 0,
+                expenseIpSum: 0,
+                weightedMarginRows: 0,
+                latestMonthKey: itemMonth || ''
+            };
+        }
+        const summary = managementSummaryByPartner[pid];
+        summary.rowCount += 1;
+        summary.marginSum += normalizedRow.margin;
+        summary.rawMarginSum += normalizedRow.rawMargin;
+        summary.revenueGrossSum += normalizedRow.revenueGross;
+        summary.revenueNetSum += normalizedRow.revenueNet;
+        summary.partnerMarginSum += normalizedRow.partnerMargin;
+        summary.expenseIpSum += normalizedRow.expenseIp;
+        if (normalizedRow.hasWeightedMarginFields) summary.weightedMarginRows += 1;
+        if (itemMonth && String(itemMonth) > String(summary.latestMonthKey || '')) {
+            summary.latestMonthKey = itemMonth;
+        }
+
+        if (hasLegacyFields) {
+            const updatedAt = normalizeScalar(getFieldValue(item, 'UPDATED_TIME')) || normalizeScalar(getFieldValue(item, 'CREATED_TIME')) || '';
+            const current = managementScoresByPartner[pid];
+            if (!current || String(updatedAt) > String(current.updatedAt || '')) {
+                managementScoresByPartner[pid] = { score: marginScore, updatedAt };
+            }
+        }
+    }
+
+    for (const [pid, summary] of Object.entries(managementSummaryByPartner)) {
+        const canUsePowerBiFormula = summary.weightedMarginRows > 0 && summary.revenueNetSum !== 0;
+        const marginShare = canUsePowerBiFormula
+            ? summary.partnerMarginSum / summary.revenueNetSum
+            : (summary.rowCount > 0 ? summary.rawMarginSum / summary.rowCount : 0);
+        summary.marginShare = marginShare;
+        summary.managementPoints = getManagementMarginPoints(marginShare);
+        summary.avgMargin = getManagementMarginQ(marginShare);
+        if (!managementScoresByPartner[pid]) {
+            managementScoresByPartner[pid] = {
+                score: summary.avgMargin,
+                updatedAt: summary.latestMonthKey || ''
+            };
         }
     }
 }
@@ -1696,6 +2138,21 @@ function getTrainingQ(pid) {
     return Math.min(1, (total / count) / 10);
 }
 
+function getTrainingPassedCount(item) {
+    const rawPassedCount = parseFloat(getFieldValue(item, FIELDS.OPU_PASSED_COUNT));
+    if (Number.isFinite(rawPassedCount)) return rawPassedCount;
+
+    const legacyCount = parseFloat(getFieldValue(item, 'UF_CRM_ASDLKJ3'));
+    if (Number.isFinite(legacyCount)) return legacyCount;
+
+    const legacyParticipantList = getFieldValue(item, 'UF_CRM_127_1756291232');
+    if (Array.isArray(legacyParticipantList) && legacyParticipantList.length > 0) {
+        return legacyParticipantList.length;
+    }
+
+    return 1;
+}
+
 function getDisciplineBaseQ(pid) {
     const stats = disciplineStatsByPartner[String(pid)];
     if (!stats || stats.totalMeetings <= 0) return 1.0;
@@ -1779,6 +2236,13 @@ function buildBitrixDealUrl(dealId) {
     return `${bitrixPortalBase}/crm/deal/details/${id}/`;
 }
 
+function buildBitrixItemUrl(entityTypeId, itemId) {
+    const entityId = String(entityTypeId || '').trim();
+    const id = String(itemId || '').trim();
+    if (!entityId || !id || !bitrixPortalBase) return '';
+    return `${bitrixPortalBase}/crm/type/${entityId}/details/${id}/`;
+}
+
 function getCallsMetricDetail(pid) {
     const items = callsByPartner[pid] || [];
     let totalScore = 0;
@@ -1794,22 +2258,42 @@ function getCallsMetricDetail(pid) {
     }
 
     if (totalAnswers === 0) {
-        return { format: 'percent', digits: 0, sub: 'нет данных', title: 'Нет заполненных ответов по обзвону' };
+        return {
+            format: 'percent',
+            digits: 0,
+            sub: 'нет данных',
+            title: 'Нет заполненных ответов по обзвону',
+            calcText: 'Формула: нет заполненных ответов, балл не считается.',
+            calcLines: ['Формула: нет заполненных ответов', 'Балл не считается.']
+        };
     }
 
     const maxScore = totalAnswers * 3;
+    const q = Math.min(1, (totalScore / totalAnswers) / 3);
+    const avgScore = totalScore / totalAnswers;
     return {
         format: 'percent',
         digits: 0,
         sub: `${formatMetricNumber(totalScore, 0)}/${formatMetricNumber(maxScore, 0)}`,
-        title: `Сумма баллов: ${formatMetricNumber(totalScore, 0)} из ${formatMetricNumber(maxScore, 0)}`
+        title: `Сумма баллов: ${formatMetricNumber(totalScore, 0)} из ${formatMetricNumber(maxScore, 0)}`,
+        calcText: `Формула: ${formatMetricNumber(totalScore, 0)} баллов / ${formatMetricNumber(totalAnswers, 0)} ответов = ${formatMetricNumber(avgScore, 1)}; ${formatMetricNumber(avgScore, 1)} / 3 = ${formatPercent(q, 0)}.`,
+        calcLines: [
+            `Формула: ${formatMetricNumber(totalScore, 0)} баллов / ${formatMetricNumber(totalAnswers, 0)} ответов = ${formatMetricNumber(avgScore, 1)}`,
+            `${formatMetricNumber(avgScore, 1)} / 3 = ${formatPercent(q, 0)}`
+        ]
     };
 }
 
 function getRemarksMetricDetail(pid) {
     const metric = remarkMetricsByPartner[String(pid)];
     if (!metric || metric.rowCount === 0) {
-        return { format: 'percent', digits: 0, sub: 'нет данных', title: 'Нет замечаний в выбранном срезе' };
+        return {
+            format: 'percent',
+            digits: 0,
+            sub: 'нет данных',
+            title: 'Нет замечаний в выбранном срезе',
+            calcLines: ['Нет замечаний в выбранном срезе']
+        };
     }
 
     const reliefFactor = getRemarksReliefFactor(pid);
@@ -1827,18 +2311,28 @@ function getRemarksMetricDetail(pid) {
         format: 'percent',
         digits: 0,
         sub: `${metric.totalLateDays}/${metric.rowCount}`,
-        title: `Дней просрочки: ${metric.totalLateDays}, замечаний: ${metric.rowCount}, штраф: ${formatMetricNumber(metric.totalPenalty, 2)}, послабление за объем: x${formatMetricNumber(reliefFactor, 2)}${missingNote}`
+        title: `Дней просрочки: ${metric.totalLateDays}, замечаний: ${metric.rowCount}, штраф: ${formatMetricNumber(metric.totalPenalty, 2)}, послабление за объем: x${formatMetricNumber(reliefFactor, 2)}${missingNote}`,
+        calcLines: [
+            `Дней просрочки: ${metric.totalLateDays}`,
+            `Замечаний: ${metric.rowCount}`,
+            `Штраф: ${formatMetricNumber(metric.totalPenalty, 2)}`,
+            `Послабление за объем: x${formatMetricNumber(reliefFactor, 2)}`
+        ]
     };
 }
 
 function getAuditMetricDetail(pid) {
-    void pid;
-    const count = 0;
+    const count = auditCountsByPartner[String(pid)] || 0;
     return {
         displayValue: count,
         digits: 0,
         sub: 'сделок',
-        title: 'Аудит временно обнулен и не влияет на итог'
+        title: count > 0
+            ? `Аудит-сделок за период: ${formatMetricNumber(count, 0)}`
+            : 'Аудит-сделок за выбранный период нет',
+        calcLines: count > 0
+            ? [`Аудит-сделок: ${formatMetricNumber(count, 0)}`]
+            : ['Аудит-сделок за выбранный период нет']
     };
 }
 
@@ -1851,7 +2345,8 @@ function getRealizationMetricDetail(pid) {
             digits: 0,
             displayText: '-',
             sub: 'нет данных',
-            title: 'Нет договоров с месяцем начисления за выбранный период; ФОТ не влияет на расчёт'
+            title: 'Нет договоров с месяцем начисления за выбранный период; ФОТ не влияет на расчёт',
+            calcLines: ['Нет договоров с месяцем начисления', 'ФОТ не влияет на расчёт']
         };
     }
 
@@ -1868,20 +2363,52 @@ function getRealizationMetricDetail(pid) {
         digits: 0,
         displayValue: displayRatio,
         sub: `${formatMoneyShort(paidAmount)} / ${formatMoneyShort(targetAmount)}`,
-        title: `Договоры: ${formatMoneyShort(contractAmount)}; цель 60%: ${formatMoneyShort(targetAmount)}; выплаты людям: ${formatMoneyShort(paidAmount)}; выполнение: ${formatPercent(rawRatio)}; сделок: ${formatMetricNumber(stats.contractDealsCount || 0, 0)}; платежей: ${formatMetricNumber(stats.paymentsCount || 0, 0)}; ${mappingText}`
+        title: `Договоры: ${formatMoneyShort(contractAmount)}; цель 60%: ${formatMoneyShort(targetAmount)}; выплаты людям: ${formatMoneyShort(paidAmount)}; выполнение: ${formatPercent(rawRatio)}; сделок: ${formatMetricNumber(stats.contractDealsCount || 0, 0)}; платежей: ${formatMetricNumber(stats.paymentsCount || 0, 0)}; ${mappingText}`,
+        calcLines: [
+            `Договоры: ${formatMoneyShort(contractAmount)}`,
+            `Цель 60%: ${formatMoneyShort(targetAmount)}`,
+            `Выплаты людям: ${formatMoneyShort(paidAmount)}`,
+            `Выполнение: ${formatPercent(rawRatio)}`,
+            `Сделок: ${formatMetricNumber(stats.contractDealsCount || 0, 0)}, платежей: ${formatMetricNumber(stats.paymentsCount || 0, 0)}`
+        ]
     };
 }
 
 function getUpravlenkaMetricDetail(pid) {
     const record = managementScoresByPartner[String(pid)];
     if (!record) {
-        return { format: 'percent', digits: 0, sub: 'нет оценки', title: 'Нет ручной оценки управленки за выбранный период' };
+        return {
+            format: 'percent',
+            digits: 0,
+            sub: 'нет оценки',
+            title: 'Нет данных управленки за выбранный период',
+            calcLines: ['Нет данных управленки']
+        };
     }
+    const summary = managementSummaryByPartner[String(pid)] || {};
+    const rowCount = Number(summary.rowCount) || 0;
+    const marginShare = Number.isFinite(Number(summary.marginShare))
+        ? Number(summary.marginShare)
+        : (Number(summary.avgMargin) || Number(record.score) || 0);
+    const points = Number.isFinite(Number(summary.managementPoints))
+        ? Number(summary.managementPoints)
+        : getManagementMarginPoints(marginShare);
+    const qValue = Number.isFinite(Number(record.score)) ? Number(record.score) : points / 10;
     return {
         format: 'percent',
         digits: 0,
-        sub: `${formatMetricNumber(record.score, 2)}/1`,
-        title: `Ручной балл управленки: ${formatMetricNumber(record.score, 2)}`
+        displayValue: qValue,
+        sub: `${formatMetricNumber(points, 0)} из 10 · ${formatPercent(marginShare, 0)} маржа`,
+        title: `Q управленки: ${formatPercent(qValue, 0)}; маржа: ${formatPercent(marginShare, 0)}; балл: ${formatMetricNumber(points, 0)} из 10; строк: ${formatMetricNumber(rowCount, 0)}`,
+        calcLines: [
+            `Строк в отчёте: ${formatMetricNumber(rowCount, 0)}`,
+            `Формула Power BI: Маржа партнёра / Реализация без НДС`,
+            `Реализация без НДС: ${formatMoneyShort(summary.revenueNetSum || 0)}`,
+            `Маржа партнёра: ${formatMoneyShort(summary.partnerMarginSum || 0)}`,
+            `Маржа %: ${formatPercent(marginShare, 0)}`,
+            `Балл по шкале: ${formatMetricNumber(points, 0)} из 10`,
+            `Q управленки: ${formatPercent(qValue, 0)}`
+        ]
     };
 }
 
@@ -1895,7 +2422,11 @@ function getClocksterMetricDetail(pid) {
             format: 'percent',
             digits: 0,
             sub: `${formatMetricNumber(hours, 1)}ч/${formatMetricNumber(totalObjects, 0)}`,
-            title: `Часы на объектах: ${formatMetricNumber(hours, 1)}, объектов в 69: ${formatMetricNumber(totalObjects, 0)}`
+            title: `Часы на объектах: ${formatMetricNumber(hours, 1)}, объектов в 69: ${formatMetricNumber(totalObjects, 0)}`,
+            calcLines: [
+                `Часы на объектах: ${formatMetricNumber(hours, 1)}`,
+                `Объектов в 69: ${formatMetricNumber(totalObjects, 0)}`
+            ]
         };
     }
 
@@ -1905,7 +2436,12 @@ function getClocksterMetricDetail(pid) {
         format: 'percent',
         digits: 0,
         sub: `${formatMetricNumber(visits, 0)}/${formatMetricNumber(totalObjects, 0)}`,
-        title: `Дедуп приходов Адрес+Дата: ${formatMetricNumber(visits, 0)}, уникальных объектов: ${formatMetricNumber(uniqueObjects, 0)}, объектов в 69: ${formatMetricNumber(totalObjects, 0)}`
+        title: `Дедуп приходов Адрес+Дата: ${formatMetricNumber(visits, 0)}, уникальных объектов: ${formatMetricNumber(uniqueObjects, 0)}, объектов в 69: ${formatMetricNumber(totalObjects, 0)}`,
+        calcLines: [
+            `Приходов: ${formatMetricNumber(visits, 0)}`,
+            `Уникальных объектов: ${formatMetricNumber(uniqueObjects, 0)}`,
+            `Объектов в 69: ${formatMetricNumber(totalObjects, 0)}`
+        ]
     };
 }
 
@@ -1913,24 +2449,39 @@ function getTrainingMetricDetail(pid) {
     const items = opuByPartner[pid] || [];
     let total = 0;
     let count = 0;
+    let passedCount = 0;
 
     for (const item of items) {
         const avgSum = parseFloat(getFieldValue(item, FIELDS.OPU_AVERAGE_SUM));
-        if (Number.isNaN(avgSum)) continue;
-        total += avgSum;
-        count += 1;
+        if (Number.isFinite(avgSum)) {
+            total += avgSum;
+            count += 1;
+        }
+        passedCount += getTrainingPassedCount(item);
     }
 
-    if (count === 0) {
-        return { format: 'percent', digits: 0, sub: '4/10 (нет данных)', title: 'Нет записей обучения за выбранный период; применяется дефолт 40%' };
+    if (items.length === 0) {
+        return {
+            format: 'percent',
+            digits: 0,
+            sub: '0 прошли',
+            title: 'Нет пройденного обучения за выбранный период; применяется дефолт 40%',
+            calcLines: ['Нет пройденного обучения', 'Применяется дефолт 40%']
+        };
     }
 
-    const avg = total / count;
+    const avg = count > 0 ? total / count : null;
+    const passedLabel = formatMetricNumber(passedCount, 0);
     return {
         format: 'percent',
         digits: 0,
-        sub: `${formatMetricNumber(avg, 2)}/10`,
-        title: `Средняя сумма: ${formatMetricNumber(avg, 2)} из 10`
+        sub: `${passedLabel} прошли`,
+        title: avg == null
+            ? `Прошли обучение: ${passedLabel}; средний балл/сумма: нет данных`
+            : `Прошли обучение: ${passedLabel}; средний балл/сумма: ${formatMetricNumber(avg, 2)} из 10`,
+        calcLines: avg == null
+            ? [`Прошли обучение: ${passedLabel}`, 'Средний балл/сумма: нет данных']
+            : [`Прошли обучение: ${passedLabel}`, `Средний балл/сумма: ${formatMetricNumber(avg, 2)} из 10`]
     };
 }
 
@@ -1966,6 +2517,7 @@ function buildPartnerBreakdown(pid, rowData = null) {
     const remarkMetric = remarkMetricsByPartner[String(pid)] || null;
     const callsItemsForPartner = callsByPartner[String(pid)] || [];
     const trainingItemsForPartner = opuByPartner[String(pid)] || [];
+    const trainingMetric = getTrainingMetricDetail(pid);
     const disciplineStats = disciplineStatsByPartner[String(pid)] || null;
     const managementRecord = managementScoresByPartner[String(pid)] || null;
     const fotStats = getFotDbStats(pid);
@@ -1973,6 +2525,9 @@ function buildPartnerBreakdown(pid, rowData = null) {
     const remarksRelief = getRemarksReliefFactor(pid);
     const row = rowData || null;
     const overdueRemarkItems = (remarkMetric?.items || []).filter(item => Number(item?.lateDays) > 0);
+    const selectedMonth = getSelectedMonth();
+    const auditItems = buildAuditItems(pid, selectedMonth);
+    const auditCount = auditCountsByPartner[String(pid)] || 0;
 
     return {
         summary: {
@@ -1983,7 +2538,9 @@ function buildPartnerBreakdown(pid, rowData = null) {
         calls: {
             score: getCallsQ(pid),
             title: 'Обзвон',
+            items: callsItemsForPartner.map(describeCallsItem),
             lines: [
+                `Записей в расчёте: ${callsItemsForPartner.length}`,
                 `Ответов, вошедших в расчёт: ${callsItemsForPartner.length ? getCallsMetricDetail(pid).sub || 'есть данные' : 'нет данных'}`,
                 `Q обзвона: ${formatPercent(getCallsQ(pid), 0)}`
             ]
@@ -1999,8 +2556,6 @@ function buildPartnerBreakdown(pid, rowData = null) {
                 `Замечаний в расчёте: ${remarkMetric?.rowCount || 0}`,
                 `Просроченных замечаний: ${overdueRemarkItems.length}`,
                 `Суммарная просрочка: ${remarkMetric?.totalLateDays || 0} дн.`,
-                `Штраф до послабления: ${formatMetricNumber(remarkMetric?.totalPenalty || 0, 2)}`,
-                `Послабление за объём замечаний: x${formatMetricNumber(remarksRelief, 2)}`,
                 `Итоговый Q замечаний: ${formatPercent(getRemarksQ(pid), 0)}`
             ],
             items: overdueRemarkItems.map(item => ({
@@ -2017,7 +2572,13 @@ function buildPartnerBreakdown(pid, rowData = null) {
         audit: {
             score: getAuditQ(pid),
             title: 'Аудит',
-            lines: []
+            totalCount: auditCount,
+            lines: [
+                `Аудит-сделок в расчёте: ${formatMetricNumber(auditCount, 0)}`,
+                `Штраф по аудиту: ${formatMetricNumber(row?.auditPenaltyScore || 0, 0)} бал.`,
+                `Итоговый Q аудита: ${formatPercent(getAuditQ(pid), 0)}`
+            ],
+            items: auditItems
         },
         realization: {
             score: getRealizationQ(pid),
@@ -2033,9 +2594,12 @@ function buildPartnerBreakdown(pid, rowData = null) {
         upravlenka: {
             score: getUpravlenkaQ(pid),
             title: 'Управленка',
+            summary: managementSummaryByPartner[String(pid)] || null,
+            rows: managementRowsByPartner[String(pid)] || [],
             lines: managementRecord
                 ? [
-                    `Ручная оценка управленки: ${formatMetricNumber(managementRecord.score, 2)} из 1`,
+                    `Строк в отчёте: ${(managementSummaryByPartner[String(pid)]?.rowCount) || 0}`,
+                    `Средняя маржа: ${formatPercent(managementRecord.score, 0)}`,
                     `Последнее обновление: ${managementRecord.updatedAt || 'без даты'}`
                 ]
                 : ['Оценка за выбранный месяц пока не заполнена.']
@@ -2043,15 +2607,16 @@ function buildPartnerBreakdown(pid, rowData = null) {
         clockster: {
             score: getClocksterQ(pid),
             title: 'Клостер',
+            missedObjects: buildClocksterMissedObjects(pid, row),
             lines: usesHoursBasedClockster(pid)
                 ? [
                     `Часы на объектах: ${formatMetricNumber(clocksterMetric?.hours || 0, 1)}`,
-                    `Объектов в базе 69: ${formatMetricNumber(row?.dealsCount || 0, 0)}`
+                    `Реализация: ${formatMetricNumber(row?.dealsCount || 0, 0)}`
                 ]
                 : [
                     `Уникальных приходов: ${formatMetricNumber(clocksterMetric?.visits || 0, 0)}`,
                     `Уникальных объектов: ${formatMetricNumber(clocksterMetric?.uniqueObjects || 0, 0)}`,
-                    `Объектов в базе 69: ${formatMetricNumber(row?.dealsCount || 0, 0)}`
+                    `Реализация: ${formatMetricNumber(row?.dealsCount || 0, 0)}`
                 ]
         },
         training: {
@@ -2059,10 +2624,10 @@ function buildPartnerBreakdown(pid, rowData = null) {
             title: 'Обучение',
             lines: trainingItemsForPartner.length
                 ? [
-                    `Записей обучения: ${trainingItemsForPartner.length}`,
-                    `Средний балл/сумма: ${getTrainingMetricDetail(pid).sub || ''}`
+                    `Прошли обучение: ${trainingMetric.sub || '0 прошли'}`,
+                    `Средний балл/сумма: ${trainingMetric.title || ''}`
                 ]
-                : ['За выбранный период записей обучения нет.']
+                : ['За выбранный период никто не прошел обучение.']
         },
         discipline: {
             score: getDisciplineQ(pid),
@@ -2410,10 +2975,15 @@ function renderMatrixGroupControls() {
     container.innerHTML = '';
     const allExpanded = areAllMatrixGroupsExpanded();
 
+    const label = document.createElement('span');
+    label.className = 'matrix-controls-label';
+    label.textContent = 'Показать колонки:';
+    container.appendChild(label);
+
     const allButton = document.createElement('button');
     allButton.type = 'button';
     allButton.className = `matrix-toggle matrix-toggle-all${allExpanded ? ' is-active' : ''}`;
-    allButton.textContent = 'Все';
+    allButton.textContent = 'Все колонки';
     allButton.title = allExpanded ? 'Свернуть все категории' : 'Раскрыть все категории';
     allButton.setAttribute('aria-pressed', allExpanded ? 'true' : 'false');
     allButton.addEventListener('click', () => {
@@ -2793,7 +3363,7 @@ function updateStats(matrixData, partners) {
             return sum + ((row.breakdown?.remarks?.items || []).length || 0);
         }, 0);
         const overdueDays = activeMatrixRows.reduce((sum, row) => sum + (row.remarksLateDaysTotal || 0), 0);
-        const totalAudits = activeMatrixRows.reduce((sum, row) => sum + (auditCountsByPartner[row.partnerId] || 0), 0);
+        const totalAudits = activeMatrixRows.reduce((sum, row) => sum + (auditCountsByPartner[row.bitrixPartnerId] || 0), 0);
 
         setText('avgScoreTotal', totalAvg);
         setText('activeDealsCount', String(activeMatrixRows.length));
@@ -2806,7 +3376,6 @@ function updateStats(matrixData, partners) {
         setText('moneyAvg', moneyAvg);
         setText('operationsAvg', operationsAvg);
         setText('complexityAvg', complexityAvg);
-        setText('matrixOverview', `${activeMatrixRows.length} партнёров · ${formatMetricNumber(totalObjects, 0)} объектов · ${formatMetricNumber(overdueRemarks, 0)} просрочек`);
         return;
     }
 
@@ -2933,14 +3502,18 @@ function renderFromSnapshot(snapshot, { persistCache = false } = {}) {
 
 async function loadDashboard(options = {}) {
     const forceRefresh = Boolean(options.forceRefresh);
+    const requestedMonth = getSelectedMonth();
     const refreshBtn = document.getElementById('refreshBtn');
     const cached = !forceRefresh ? loadCache() : null;
     const hasCachedData = Array.isArray(cached?.deals69) && cached.deals69.length > 0;
     const hasVisibleRows = matrixRows.length > 0;
+    const cachedHasPortalBase = Boolean(cached?.bitrixPortalBase);
+    const cachedMonth = normalizeSelectedMonth(cached?.selectedMonth || '');
+    const cachedMatchesMonth = cachedMonth === requestedMonth;
     if (refreshBtn) refreshBtn.disabled = true;
     const originalRefreshText = refreshBtn?.textContent || 'Обновить данные';
 
-    if (hasCachedData) {
+    if (hasCachedData && cachedMatchesMonth) {
         try {
             renderFromSnapshot(cached);
             showLoader(false);
@@ -2958,7 +3531,7 @@ async function loadDashboard(options = {}) {
     }
 
     try {
-        if (!forceRefresh && hasCachedData) {
+        if (!forceRefresh && hasCachedData && cachedHasPortalBase && cachedMatchesMonth) {
             return;
         }
         if (!hasCachedData && !hasVisibleRows) {
@@ -2969,6 +3542,12 @@ async function loadDashboard(options = {}) {
             try { localStorage.removeItem(CACHE_KEY); } catch (_) {}
         }
         const bootstrap = await fetchBootstrapData(forceRefresh);
+        let managementReport = { rows: [] };
+        try {
+            managementReport = await fetchManagementReport(requestedMonth);
+        } catch (error) {
+            console.warn('fetchManagementReport failed:', error?.message || error);
+        }
 
         const hasNewData = Array.isArray(bootstrap?.deals69) && bootstrap.deals69.length > 0;
 
@@ -2985,8 +3564,9 @@ async function loadDashboard(options = {}) {
         await refreshClocksterMetrics();
         const snapshotToPersist = {
             ...bootstrap,
+            managementItems: Array.isArray(managementReport?.rows) ? managementReport.rows : (bootstrap.managementItems || []),
             timestamp: Date.now(),
-            selectedMonth: getSelectedMonth(),
+            selectedMonth: requestedMonth,
             selectedExamplePartnerId,
             expandedMatrixGroups,
             clocksterMetricsCache
@@ -3042,6 +3622,8 @@ function applyTestState(patch = {}) {
     if (Object.hasOwn(patch, 'auditCountsByPartner')) auditCountsByPartner = patch.auditCountsByPartner;
     if (Object.hasOwn(patch, 'bitrixPortalBase')) bitrixPortalBase = patch.bitrixPortalBase;
     if (Object.hasOwn(patch, 'expandedMatrixGroups')) expandedMatrixGroups = patch.expandedMatrixGroups;
+    if (Object.hasOwn(patch, 'managementRowsByPartner')) managementRowsByPartner = patch.managementRowsByPartner;
+    if (Object.hasOwn(patch, 'managementSummaryByPartner')) managementSummaryByPartner = patch.managementSummaryByPartner;
 }
 
 function resetTestState() {
@@ -3061,6 +3643,8 @@ function resetTestState() {
         list115PartnerByElementId: {},
         clocksterMetricsByPartner: {},
         clocksterMetricsCache: {},
+        managementRowsByPartner: {},
+        managementSummaryByPartner: {},
         bitrixPortalBase: '',
         partnersData: {},
         remarkMetricsByPartner: {},
@@ -3076,6 +3660,8 @@ function resetTestState() {
     fotTriggerDealsByPartner = {};
     disciplineStatsByPartner = {};
     managementScoresByPartner = {};
+    managementRowsByPartner = {};
+    managementSummaryByPartner = {};
     remarkMetricsByPartner = {};
     auditCountsByPartner = {};
     accountCoeffStatsByPartner = {};
@@ -3121,6 +3707,9 @@ const DASHBOARD_TEST_API = {
     getTrainingQ,
     getDisciplineQ,
     getUpravlenkaQ,
+    getManagementMarginQ,
+    getManagementRowsForPartner: pid => (managementRowsByPartner[String(pid)] || []).map(row => ({ ...row })),
+    getManagementSummaryForPartner: pid => ({ ...(managementSummaryByPartner[String(pid)] || {}) }),
     getClocksterQ,
     buildClocksterMetrics,
     applyHiddenComplexityBoost,
@@ -3140,6 +3729,8 @@ if (typeof window !== 'undefined') {
         getMatrixRowsSnapshot: () => matrixRows.map(row => ({ ...row })),
         formatPercent,
         formatMetricNumber,
+        formatMoneyShort,
+        formatMonthLabel,
         escapeHtml
     };
 }
@@ -3149,14 +3740,7 @@ if (typeof window !== 'undefined') {
 if (typeof document !== 'undefined' && typeof window !== 'undefined') {
     document.getElementById('refreshBtn')?.addEventListener('click', () => loadDashboard({ forceRefresh: true }));
     document.getElementById('monthSelect')?.addEventListener('change', () => {
-        Promise.resolve().then(async () => {
-            buildIndexes();
-            processData();
-            await refreshClocksterMetrics();
-            buildMatrixRows();
-            renderUI();
-            saveCache();
-        });
+        loadDashboard();
     });
 
     window.addEventListener('load', () => {
