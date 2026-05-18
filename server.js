@@ -45,6 +45,8 @@ const CABINET_CODE_TTL = Number(process.env.CABINET_CODE_TTL_MS || 5 * 60 * 1000
 const CABINET_SESSION_TTL = Number(process.env.CABINET_SESSION_TTL_MS || 14 * 24 * 60 * 60 * 1000);
 const CABINET_DATABASE_URL = process.env.CABINET_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || '';
 const CABINET_DB_DISABLED = process.env.CABINET_DB_DISABLED === '1' || process.env.CABINET_DB_DISABLED === 'true';
+const BOOTSTRAP_PROXY_URL = process.env.BOOTSTRAP_PROXY_URL || '';
+const BOOTSTRAP_PROXY_TOKEN = process.env.BOOTSTRAP_PROXY_TOKEN || '';
 const MANAGEMENT_PROXY_URL = process.env.MANAGEMENT_PROXY_URL || '';
 const MANAGEMENT_PROXY_TOKEN = process.env.MANAGEMENT_PROXY_TOKEN || '';
 const MANAGEMENT_MYSQL_CONFIG = {
@@ -293,6 +295,24 @@ async function fetchManagementReportFromProxy(monthKey = '') {
     });
     if (!response.ok) {
         throw new Error(`Management proxy HTTP ${response.status}`);
+    }
+    return response.json();
+}
+
+async function fetchBootstrapFromProxy(forceRefresh = false) {
+    if (!BOOTSTRAP_PROXY_URL) return null;
+    const target = new URL(BOOTSTRAP_PROXY_URL);
+    if (forceRefresh) target.searchParams.set('refresh', '1');
+    const headers = {};
+    if (BOOTSTRAP_PROXY_TOKEN) {
+        headers.Authorization = `Bearer ${BOOTSTRAP_PROXY_TOKEN}`;
+    }
+    const response = await fetch(target, {
+        headers,
+        cache: 'no-store'
+    });
+    if (!response.ok) {
+        throw new Error(`Bootstrap proxy HTTP ${response.status}`);
     }
     return response.json();
 }
@@ -1519,6 +1539,18 @@ async function buildBootstrapData() {
 async function handleBootstrap(req, res) {
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
+
+    if (BOOTSTRAP_PROXY_URL) {
+        try {
+            const payload = await fetchBootstrapFromProxy(forceRefresh);
+            bootstrapCache.timestamp = Number(payload?.timestamp) || Date.now();
+            bootstrapCache.data = payload;
+            sendJson(res, 200, payload);
+            return;
+        } catch (error) {
+            console.warn('fetchBootstrapFromProxy failed:', error.message || error);
+        }
+    }
 
     if (!forceRefresh) {
         if (bootstrapCache.data) {

@@ -30,6 +30,7 @@ loadEnvFile(path.join(ROOT_DIR, '.env'));
 const PORT = Number(process.env.MANAGEMENT_PROXY_PORT || 3011);
 const HOST = process.env.MANAGEMENT_PROXY_HOST || '0.0.0.0';
 const MANAGEMENT_PROXY_TOKEN = process.env.MANAGEMENT_PROXY_TOKEN || '';
+const BOOTSTRAP_UPSTREAM_URL = process.env.BOOTSTRAP_UPSTREAM_URL || 'http://127.0.0.1:3008/api/bootstrap';
 const MANAGEMENT_MYSQL_CONFIG = {
     host: process.env.MYSQL_HOST || '',
     port: Number(process.env.MYSQL_PORT || 3306),
@@ -169,16 +170,35 @@ async function requestListener(req, res) {
         sendJson(res, 200, { ok: true });
         return;
     }
+    if (!isAuthorized(req)) {
+        sendJson(res, 401, { error: 'Unauthorized' });
+        return;
+    }
+    if (requestUrl.pathname === '/api/bootstrap') {
+        try {
+            const target = new URL(BOOTSTRAP_UPSTREAM_URL);
+            if (requestUrl.searchParams.get('refresh') === '1') {
+                target.searchParams.set('refresh', '1');
+            }
+            const response = await fetch(target, { cache: 'no-store' });
+            const body = await response.text();
+            res.writeHead(response.status, {
+                'Content-Type': response.headers.get('content-type') || 'application/json; charset=utf-8',
+                'Cache-Control': 'no-store'
+            });
+            res.end(body);
+            return;
+        } catch (error) {
+            sendJson(res, 502, { error: error.message || 'Bootstrap proxy failed' });
+            return;
+        }
+    }
     if (requestUrl.pathname !== '/api/management-report') {
         sendJson(res, 404, { error: 'Not found' });
         return;
     }
     if (req.method !== 'GET') {
         sendJson(res, 405, { error: 'Method not allowed' });
-        return;
-    }
-    if (!isAuthorized(req)) {
-        sendJson(res, 401, { error: 'Unauthorized' });
         return;
     }
     try {

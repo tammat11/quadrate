@@ -3533,9 +3533,6 @@ async function loadDashboard(options = {}) {
     }
 
     try {
-        if (!forceRefresh && hasCachedData && cachedHasPortalBase && cachedMatchesMonth) {
-            return;
-        }
         if (!hasCachedData && !hasVisibleRows) {
             showLoader(true, 'Загрузка данных с сервера...', 15);
         }
@@ -3543,13 +3540,13 @@ async function loadDashboard(options = {}) {
             clocksterMetricsCache = {};
             try { localStorage.removeItem(CACHE_KEY); } catch (_) {}
         }
+        const managementReportPromise = fetchManagementReport(requestedMonth)
+            .catch(error => {
+                console.warn('fetchManagementReport failed:', error?.message || error);
+                return { rows: [] };
+            });
         const bootstrap = await fetchBootstrapData(forceRefresh);
-        let managementReport = { rows: [] };
-        try {
-            managementReport = await fetchManagementReport(requestedMonth);
-        } catch (error) {
-            console.warn('fetchManagementReport failed:', error?.message || error);
-        }
+        const managementReport = await managementReportPromise;
 
         const hasNewData = Array.isArray(bootstrap?.deals69) && bootstrap.deals69.length > 0;
 
