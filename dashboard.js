@@ -2398,14 +2398,13 @@ function getUpravlenkaMetricDetail(pid) {
         format: 'percent',
         digits: 0,
         displayValue: qValue,
-        sub: `${formatMetricNumber(points, 0)} из 10 · ${formatPercent(marginShare, 0)} маржа`,
-        title: `Q управленки: ${formatPercent(qValue, 0)}; маржа: ${formatPercent(marginShare, 0)}; балл: ${formatMetricNumber(points, 0)} из 10; строк: ${formatMetricNumber(rowCount, 0)}`,
+        sub: `${formatMetricNumber(points, 0)} из 10`,
+        title: `Q управленки: ${formatPercent(qValue, 0)}; балл: ${formatMetricNumber(points, 0)} из 10; строк: ${formatMetricNumber(rowCount, 0)}`,
         calcLines: [
             `Строк в отчёте: ${formatMetricNumber(rowCount, 0)}`,
             `Формула Power BI: Маржа партнёра / Реализация без НДС`,
             `Реализация без НДС: ${formatMoneyShort(summary.revenueNetSum || 0)}`,
             `Маржа партнёра: ${formatMoneyShort(summary.partnerMarginSum || 0)}`,
-            `Маржа %: ${formatPercent(marginShare, 0)}`,
             `Балл по шкале: ${formatMetricNumber(points, 0)} из 10`,
             `Q управленки: ${formatPercent(qValue, 0)}`
         ]
