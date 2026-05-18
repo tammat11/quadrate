@@ -2669,7 +2669,6 @@ const MATRIX_CRITERIA_BY_KEY = Object.fromEntries(
 
 function renderMetricCell(value, detail) {
     const sub = detail?.sub || '';
-    const title = detail?.title ? ` title="${detail.title.replace(/"/g, '&quot;')}"` : '';
     const displayValue = Number(detail?.displayValue ?? value ?? 0);
     const digits = Number.isFinite(detail?.digits) ? detail.digits : 2;
     const mainValue = typeof detail?.displayText === 'string'
@@ -2677,13 +2676,12 @@ function renderMetricCell(value, detail) {
         : detail?.format === 'percent'
         ? formatPercent(displayValue, digits)
         : (Number.isFinite(displayValue) ? displayValue.toFixed(digits) : '0');
-    return `<td${title}><div class="metric-main">${mainValue}</div><div class="metric-sub">${sub}</div></td>`;
+    return `<td><div class="metric-main">${mainValue}</div><div class="metric-sub">${sub}</div></td>`;
 }
 
 function renderSummaryCell(value, detail) {
     const sub = detail?.sub || '';
-    const title = detail?.title ? ` title="${detail.title.replace(/"/g, '&quot;')}"` : '';
-    return `<td${title}><div class="metric-main">${(value ?? 0).toFixed(1)}</div><div class="metric-sub">${sub}</div></td>`;
+    return `<td><div class="metric-main">${(value ?? 0).toFixed(1)}</div><div class="metric-sub">${sub}</div></td>`;
 }
 
 function getVisibleMatrixColumns() {
