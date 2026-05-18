@@ -45,6 +45,8 @@ const CABINET_CODE_TTL = Number(process.env.CABINET_CODE_TTL_MS || 5 * 60 * 1000
 const CABINET_SESSION_TTL = Number(process.env.CABINET_SESSION_TTL_MS || 14 * 24 * 60 * 60 * 1000);
 const CABINET_DATABASE_URL = process.env.CABINET_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || '';
 const CABINET_DB_DISABLED = process.env.CABINET_DB_DISABLED === '1' || process.env.CABINET_DB_DISABLED === 'true';
+const MANAGEMENT_PROXY_URL = process.env.MANAGEMENT_PROXY_URL || '';
+const MANAGEMENT_PROXY_TOKEN = process.env.MANAGEMENT_PROXY_TOKEN || '';
 const MANAGEMENT_MYSQL_CONFIG = {
     host: process.env.MYSQL_HOST || '',
     port: Number(process.env.MYSQL_PORT || 3306),
@@ -275,6 +277,24 @@ async function fetchManagementRows(monthKey = '') {
     const sql = sqlParts.join(' ');
     const [rows] = await queryManagementMysql(sql, params);
     return rows;
+}
+
+async function fetchManagementReportFromProxy(monthKey = '') {
+    if (!MANAGEMENT_PROXY_URL) return null;
+    const target = new URL(MANAGEMENT_PROXY_URL);
+    if (monthKey) target.searchParams.set('month', monthKey);
+    const headers = {};
+    if (MANAGEMENT_PROXY_TOKEN) {
+        headers.Authorization = `Bearer ${MANAGEMENT_PROXY_TOKEN}`;
+    }
+    const response = await fetch(target, {
+        headers,
+        cache: 'no-store'
+    });
+    if (!response.ok) {
+        throw new Error(`Management proxy HTTP ${response.status}`);
+    }
+    return response.json();
 }
 
 async function ensureCabinetDbSchema() {
@@ -1595,6 +1615,11 @@ async function handleManagementReport(req, res) {
     try {
         const requestUrl = new URL(req.url, `http://${req.headers.host}`);
         const month = String(requestUrl.searchParams.get('month') || '').trim();
+        if (MANAGEMENT_PROXY_URL) {
+            const payload = await fetchManagementReportFromProxy(month);
+            sendJson(res, 200, payload);
+            return;
+        }
         const rows = await fetchManagementRows(month);
         sendJson(res, 200, {
             source: 'Marja_full',
