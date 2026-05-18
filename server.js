@@ -457,6 +457,7 @@ async function handleSharedCache(req, res) {
         bootstrapCache.timestamp = Number(payload.timestamp) || Date.now();
         bootstrapCache.data = payload;
         saveBootstrapCacheToDisk(payload);
+        await saveBootstrapSnapshotToDb(payload);
         sendJson(res, 200, { ok: true });
     } catch (error) {
         sendJson(res, 400, { error: error.message || 'Shared cache save failed' });
