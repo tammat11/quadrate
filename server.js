@@ -450,9 +450,11 @@ async function handleSharedCache(req, res) {
             return;
         }
 
+        const baseSnapshot = bootstrapCache.data || await loadBootstrapSnapshotFromDb() || {};
         const payload = {
+            ...baseSnapshot,
             ...parsed,
-            bitrixPortalBase: parsed.bitrixPortalBase || BITRIX_PORTAL_BASE || ''
+            bitrixPortalBase: parsed.bitrixPortalBase || baseSnapshot.bitrixPortalBase || BITRIX_PORTAL_BASE || ''
         };
         bootstrapCache.timestamp = Number(payload.timestamp) || Date.now();
         bootstrapCache.data = payload;
