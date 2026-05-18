@@ -1528,7 +1528,10 @@ async function handleBootstrap(req, res) {
             });
             return;
         }
-        const dbSnapshot = await loadBootstrapSnapshotFromDb();
+        const dbSnapshot = await loadBootstrapSnapshotFromDb().catch(error => {
+            console.warn('loadBootstrapSnapshotFromDb failed:', error.message || error);
+            return null;
+        });
         if (dbSnapshot) {
             bootstrapCache.timestamp = Number(dbSnapshot.timestamp) || Date.now();
             bootstrapCache.data = dbSnapshot;
@@ -1542,7 +1545,7 @@ async function handleBootstrap(req, res) {
 
     if (!bootstrapCache.promise || forceRefresh) {
         bootstrapCache.promise = buildBootstrapData()
-            .then(data => {
+            .then(async data => {
                 const payload = {
                     ...data,
                     bitrixPortalBase: data.bitrixPortalBase || BITRIX_PORTAL_BASE || '',
@@ -1551,15 +1554,19 @@ async function handleBootstrap(req, res) {
                 bootstrapCache.timestamp = payload.timestamp;
                 bootstrapCache.data = payload;
                 saveBootstrapCacheToDisk(payload);
-                return saveBootstrapSnapshotToDb(payload)
-                    .catch(async error => {
-                        await writeBootstrapSyncRun('error', error.message || 'save snapshot failed', data.counts || {});
-                        return false;
-                    })
-                    .then(async () => {
-                        await writeBootstrapSyncRun('ok', forceRefresh ? 'refresh=1' : 'rebuild', data.counts || {});
-                        return payload;
+                await saveBootstrapSnapshotToDb(payload).catch(async error => {
+                    console.warn('saveBootstrapSnapshotToDb failed:', error.message || error);
+                    await writeBootstrapSyncRun('error', error.message || 'save snapshot failed', data.counts || {})
+                        .catch(syncError => {
+                            console.warn('writeBootstrapSyncRun(error) failed:', syncError.message || syncError);
+                        });
+                    return false;
+                });
+                await writeBootstrapSyncRun('ok', forceRefresh ? 'refresh=1' : 'rebuild', data.counts || {})
+                    .catch(error => {
+                        console.warn('writeBootstrapSyncRun(ok) failed:', error.message || error);
                     });
+                return payload;
             })
             .finally(() => {
                 bootstrapCache.promise = null;
@@ -1593,15 +1600,22 @@ async function handleBootstrapSync(req, res) {
         bootstrapCache.timestamp = payload.timestamp;
         bootstrapCache.data = payload;
         saveBootstrapCacheToDisk(payload);
-        await saveBootstrapSnapshotToDb(payload);
-        await writeBootstrapSyncRun('ok', 'manual sync endpoint', data.counts || {});
+        await saveBootstrapSnapshotToDb(payload).catch(error => {
+            console.warn('saveBootstrapSnapshotToDb failed:', error.message || error);
+            return false;
+        });
+        await writeBootstrapSyncRun('ok', 'manual sync endpoint', data.counts || {}).catch(error => {
+            console.warn('writeBootstrapSyncRun(ok) failed:', error.message || error);
+        });
         sendJson(res, 200, {
             ok: true,
             timestamp: payload.timestamp,
             counts: data.counts || {}
         });
     } catch (error) {
-        await writeBootstrapSyncRun('error', error.message || 'manual sync failed');
+        await writeBootstrapSyncRun('error', error.message || 'manual sync failed').catch(syncError => {
+            console.warn('writeBootstrapSyncRun(error) failed:', syncError.message || syncError);
+        });
         sendJson(res, 502, { error: error.message || 'Bootstrap sync failed' });
     }
 }
