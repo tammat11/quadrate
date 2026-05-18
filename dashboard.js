@@ -3354,6 +3354,7 @@ function updateStats(matrixData, partners) {
         const relationsAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.relationsScore || 0), 0) / activeMatrixRows.length).toFixed(1);
         const moneyAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.moneyScore || 0), 0) / activeMatrixRows.length).toFixed(1);
         const operationsAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.operationsScore || 0), 0) / activeMatrixRows.length).toFixed(1);
+        const managementAvg = activeMatrixRows.reduce((sum, row) => sum + ((Number(row.q?.upravlenka) || 0) * 100), 0) / activeMatrixRows.length;
         const complexityAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.complexityCoeff || 1), 0) / activeMatrixRows.length).toFixed(2);
         const totalObjects = activeMatrixRows.reduce((sum, row) => sum + (row.dealsCount || 0), 0);
         const totalArea = activeMatrixRows.reduce((sum, row) => sum + (row.totalArea || 0), 0);
@@ -3369,6 +3370,7 @@ function updateStats(matrixData, partners) {
         setText('activeDealsCount', String(activeMatrixRows.length));
         setText('heroObjectsCount', formatMetricNumber(totalObjects, 0));
         setText('heroAreaTotal', `${formatMetricNumber(totalArea, 1)} м²`);
+        setText('heroManagementAvg', formatPercent((managementAvg || 0) / 100, 0));
         setText('remarkDebtValue', `${formatMetricNumber(overdueDays, 0)} дн.`);
         setText('remarkDebtSub', `${formatMetricNumber(overdueRemarks, 0)} просроченных замечаний`);
         setText('auditDealsValue', String(totalAudits));
