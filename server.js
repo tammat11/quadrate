@@ -1013,6 +1013,24 @@ function canChooseCabinetPartner(phone) {
     return Boolean(CABINET_PARTNER_PICKER_PHONE) && normalizePhone(phone) === CABINET_PARTNER_PICKER_PHONE;
 }
 
+async function loadCabinetAccountsForPhone(phone, forceRefresh = false) {
+    const allowPartnerPicker = canChooseCabinetPartner(phone);
+    try {
+        const accountsByPhone = await getCabinetAccounts(forceRefresh);
+        return {
+            accounts: accountsByPhone[phone] || [],
+            allowPartnerPicker
+        };
+    } catch (error) {
+        if (!allowPartnerPicker) throw error;
+        console.warn(`Cabinet accounts lookup failed for picker phone ${phone}:`, error.message || error);
+        return {
+            accounts: [],
+            allowPartnerPicker
+        };
+    }
+}
+
 function cabinetCookie(token, expiresAt) {
     const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
     return `cabinet_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
@@ -1069,9 +1087,8 @@ async function handleCabinetAuth(req, res, pathname) {
             return;
         }
 
-        const accountsByPhone = await getCabinetAccounts(Boolean(payload.refresh));
-        const accounts = accountsByPhone[phone] || [];
-        if (accounts.length === 0 && !canChooseCabinetPartner(phone)) {
+        const { accounts, allowPartnerPicker } = await loadCabinetAccountsForPhone(phone, Boolean(payload.refresh));
+        if (accounts.length === 0 && !allowPartnerPicker) {
             sendJson(res, 404, { error: 'Номер не найден в инфоблоке 109' });
             return;
         }
@@ -1113,9 +1130,8 @@ async function handleCabinetAuth(req, res, pathname) {
             return;
         }
 
-        const accountsByPhone = await getCabinetAccounts();
-        const accounts = accountsByPhone[phone] || [];
-        if (accounts.length === 0 && !canChooseCabinetPartner(phone)) {
+        const { accounts, allowPartnerPicker } = await loadCabinetAccountsForPhone(phone);
+        if (accounts.length === 0 && !allowPartnerPicker) {
             sendJson(res, 404, { error: 'Номер больше не привязан к кабинету' });
             return;
         }
