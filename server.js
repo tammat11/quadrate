@@ -1093,6 +1093,20 @@ async function handleCabinetAuth(req, res, pathname) {
             return;
         }
 
+        if (allowPartnerPicker) {
+            const session = await createCabinetSession(phone, accounts);
+            sendJsonWithHeaders(res, 200, {
+                ok: true,
+                autoLogin: true,
+                phoneMasked: maskPhone(phone),
+                canChoosePartner: true,
+                accounts
+            }, {
+                'Set-Cookie': cabinetCookie(session.token, session.expiresAt)
+            });
+            return;
+        }
+
         const code = String(crypto.randomInt(100000, 999999));
         await upsertCabinetCode(
             phone,

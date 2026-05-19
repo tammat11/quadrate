@@ -1164,6 +1164,13 @@ phoneForm.addEventListener('submit', async event => {
     setAuthMessage('Отправляем код...');
     try {
         const data = await postJson('/api/cabinet/request-code', { phone: currentPhone });
+        if (data.autoLogin) {
+            currentSession = data;
+            showCabinet();
+            setAuthMessage('');
+            await loadCabinetData();
+            return;
+        }
         phoneForm.hidden = true;
         codeForm.hidden = false;
         codeInput.focus();
