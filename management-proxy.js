@@ -31,6 +31,9 @@ const PORT = Number(process.env.MANAGEMENT_PROXY_PORT || 3011);
 const HOST = process.env.MANAGEMENT_PROXY_HOST || '0.0.0.0';
 const MANAGEMENT_PROXY_TOKEN = process.env.MANAGEMENT_PROXY_TOKEN || '';
 const BOOTSTRAP_UPSTREAM_URL = process.env.BOOTSTRAP_UPSTREAM_URL || 'http://127.0.0.1:3008/api/bootstrap';
+const CABINET_UPSTREAM_BASE_URL = process.env.CABINET_UPSTREAM_BASE_URL || 'http://127.0.0.1:3008';
+const WHATSAPP_INTERNAL_API_URL = process.env.WHATSAPP_INTERNAL_API_URL || 'http://127.0.0.1:3010/send';
+const WHATSAPP_INTERNAL_API_SECRET = process.env.WHATSAPP_INTERNAL_API_SECRET || '';
 const MANAGEMENT_MYSQL_CONFIG = {
     host: process.env.MYSQL_HOST || '',
     port: Number(process.env.MYSQL_PORT || 3306),
@@ -164,6 +167,34 @@ function isAuthorized(req) {
     return header === `Bearer ${MANAGEMENT_PROXY_TOKEN}`;
 }
 
+async function readRequestBody(req) {
+    return new Promise((resolve, reject) => {
+        let raw = '';
+        req.on('data', chunk => {
+            raw += chunk;
+            if (raw.length > 1024 * 1024) {
+                reject(new Error('Request body too large'));
+                req.destroy();
+            }
+        });
+        req.on('end', () => resolve(raw));
+        req.on('error', reject);
+    });
+}
+
+async function proxyToUpstream(target, { method = 'GET', headers = {}, body = null } = {}) {
+    const response = await fetch(target, {
+        method,
+        headers,
+        body
+    });
+    return {
+        status: response.status,
+        headers: Object.fromEntries(response.headers.entries()),
+        body: await response.text()
+    };
+}
+
 async function requestListener(req, res) {
     const requestUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     if (requestUrl.pathname === '/health') {
@@ -180,16 +211,74 @@ async function requestListener(req, res) {
             if (requestUrl.searchParams.get('refresh') === '1') {
                 target.searchParams.set('refresh', '1');
             }
-            const response = await fetch(target, { cache: 'no-store' });
-            const body = await response.text();
+            const upstream = await proxyToUpstream(target);
+            res.writeHead(upstream.status, {
+                'Content-Type': upstream.headers['content-type'] || 'application/json; charset=utf-8',
+                'Cache-Control': 'no-store'
+            });
+            res.end(upstream.body);
+            return;
+        } catch (error) {
+            sendJson(res, 502, { error: error.message || 'Bootstrap proxy failed' });
+            return;
+        }
+    }
+    if (requestUrl.pathname.startsWith('/api/cabinet/')) {
+        try {
+            const target = new URL(`${CABINET_UPSTREAM_BASE_URL.replace(/\/$/, '')}${requestUrl.pathname}${requestUrl.search}`);
+            const body = req.method === 'POST' ? await readRequestBody(req) : null;
+            const headers = {};
+            const contentType = req.headers['content-type'];
+            if (contentType) headers['Content-Type'] = contentType;
+            if (body) headers['Content-Length'] = Buffer.byteLength(body);
+            const upstream = await proxyToUpstream(target, {
+                method: req.method || 'GET',
+                headers,
+                body
+            });
+            const responseHeaders = {
+                'Content-Type': upstream.headers['content-type'] || 'application/json; charset=utf-8',
+                'Cache-Control': 'no-store'
+            };
+            if (upstream.headers['set-cookie']) {
+                responseHeaders['Set-Cookie'] = upstream.headers['set-cookie'];
+            }
+            res.writeHead(upstream.status, responseHeaders);
+            res.end(upstream.body);
+            return;
+        } catch (error) {
+            sendJson(res, 502, { error: error.message || 'Cabinet proxy failed' });
+            return;
+        }
+    }
+    if (requestUrl.pathname === '/api/whatsapp-send-code') {
+        if (req.method !== 'POST') {
+            sendJson(res, 405, { error: 'Method not allowed' });
+            return;
+        }
+        if (!WHATSAPP_INTERNAL_API_SECRET) {
+            sendJson(res, 500, { error: 'WhatsApp internal API secret is not configured' });
+            return;
+        }
+        try {
+            const body = await readRequestBody(req);
+            const response = await fetch(WHATSAPP_INTERNAL_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-secret': WHATSAPP_INTERNAL_API_SECRET
+                },
+                body
+            });
+            const payload = await response.text();
             res.writeHead(response.status, {
                 'Content-Type': response.headers.get('content-type') || 'application/json; charset=utf-8',
                 'Cache-Control': 'no-store'
             });
-            res.end(body);
+            res.end(payload);
             return;
         } catch (error) {
-            sendJson(res, 502, { error: error.message || 'Bootstrap proxy failed' });
+            sendJson(res, 502, { error: error.message || 'WhatsApp proxy failed' });
             return;
         }
     }

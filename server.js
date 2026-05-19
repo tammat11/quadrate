@@ -39,7 +39,9 @@ const CLOCKSTER_BASE = process.env.CLOCKSTER_BASE || 'https://api.clockster.com/
 const CLOCKSTER_TOKEN = process.env.CLOCKSTER_TOKEN || '';
 const WHATSAPP_BOT_URL = process.env.WHATSAPP_BOT_URL || '';
 const WHATSAPP_BOT_TOKEN = process.env.WHATSAPP_BOT_TOKEN || '';
-const CABINET_CODE_TARGET_PHONE = normalizePhone(process.env.CABINET_CODE_TARGET_PHONE || '');
+const CABINET_CODE_TARGET_PHONE = process.env.CABINET_ALLOW_TARGET_REDIRECT === '1'
+    ? normalizePhone(process.env.CABINET_CODE_TARGET_PHONE || '')
+    : '';
 const CABINET_PARTNER_PICKER_PHONE = normalizePhone(process.env.CABINET_PARTNER_PICKER_PHONE || '77070522006');
 const CABINET_SESSION_SECRET = process.env.CABINET_SESSION_SECRET || WHATSAPP_BOT_TOKEN || 'cabinet-dev-secret';
 const CABINET_CODE_TTL = Number(process.env.CABINET_CODE_TTL_MS || 5 * 60 * 1000);
@@ -50,6 +52,8 @@ const BOOTSTRAP_PROXY_URL = process.env.BOOTSTRAP_PROXY_URL || '';
 const BOOTSTRAP_PROXY_TOKEN = process.env.BOOTSTRAP_PROXY_TOKEN || '';
 const MANAGEMENT_PROXY_URL = process.env.MANAGEMENT_PROXY_URL || '';
 const MANAGEMENT_PROXY_TOKEN = process.env.MANAGEMENT_PROXY_TOKEN || '';
+const CABINET_PROXY_URL = process.env.CABINET_PROXY_URL || '';
+const CABINET_PROXY_TOKEN = process.env.CABINET_PROXY_TOKEN || '';
 const MANAGEMENT_MYSQL_CONFIG = {
     host: process.env.MYSQL_HOST || '',
     port: Number(process.env.MYSQL_PORT || 3306),
@@ -316,6 +320,25 @@ async function fetchBootstrapFromProxy(forceRefresh = false) {
         throw new Error(`Bootstrap proxy HTTP ${response.status}`);
     }
     return response.json();
+}
+
+async function proxyCabinetRequest(req) {
+    if (!CABINET_PROXY_URL) return null;
+    const requestUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    const target = new URL(`${CABINET_PROXY_URL.replace(/\/$/, '')}${requestUrl.pathname}${requestUrl.search}`);
+    const headers = {};
+    if (CABINET_PROXY_TOKEN) {
+        headers.Authorization = `Bearer ${CABINET_PROXY_TOKEN}`;
+    }
+    const contentType = req.headers['content-type'];
+    if (contentType) headers['Content-Type'] = contentType;
+    const body = req.method === 'POST' ? await readRequestBody(req) : null;
+    if (body) headers['Content-Length'] = Buffer.byteLength(body);
+    return proxyRequest(target, {
+        method: req.method || 'GET',
+        headers,
+        body
+    });
 }
 
 async function ensureCabinetDbSchema() {
@@ -1084,6 +1107,23 @@ function cabinetCookie(token, expiresAt) {
 }
 
 async function handleCabinetAuth(req, res, pathname) {
+    if (CABINET_PROXY_URL) {
+        const upstream = await proxyCabinetRequest(req);
+        if (!upstream) {
+            sendJson(res, 502, { error: 'Cabinet proxy is not configured' });
+            return;
+        }
+        const responseHeaders = {
+            'Content-Type': upstream.headers['content-type'] || 'application/json; charset=utf-8'
+        };
+        if (upstream.headers['set-cookie']) {
+            responseHeaders['Set-Cookie'] = upstream.headers['set-cookie'];
+        }
+        res.writeHead(upstream.statusCode || 500, responseHeaders);
+        res.end(upstream.body || '');
+        return;
+    }
+
     if (pathname === '/api/cabinet/me') {
         const session = await getCabinetSession(req);
         if (!session) {
