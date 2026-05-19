@@ -1091,7 +1091,7 @@ async function handleCabinetAuth(req, res, pathname) {
             return;
         }
         let accounts = Array.isArray(session.accounts) ? session.accounts : [];
-        if (hasCabinetDbConfig() || shouldRefreshSessionAccounts(accounts)) {
+        if (!canChooseCabinetPartner(session.phone) && (hasCabinetDbConfig() || shouldRefreshSessionAccounts(accounts))) {
             const accountsByPhone = await getCabinetAccounts(false).catch(() => null);
             const latest = accountsByPhone?.[normalizePhone(session.phone)] || [];
             if (latest.length > 0) {
