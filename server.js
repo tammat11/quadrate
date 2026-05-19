@@ -41,6 +41,7 @@ const WHATSAPP_BOT_URL = process.env.WHATSAPP_BOT_URL || '';
 const WHATSAPP_BOT_TOKEN = process.env.WHATSAPP_BOT_TOKEN || '';
 const CABINET_CODE_TARGET_PHONE = normalizePhone(process.env.CABINET_CODE_TARGET_PHONE || '');
 const CABINET_PARTNER_PICKER_PHONE = normalizePhone(process.env.CABINET_PARTNER_PICKER_PHONE || '77070522006');
+const CABINET_SESSION_SECRET = process.env.CABINET_SESSION_SECRET || WHATSAPP_BOT_TOKEN || 'cabinet-dev-secret';
 const CABINET_CODE_TTL = Number(process.env.CABINET_CODE_TTL_MS || 5 * 60 * 1000);
 const CABINET_SESSION_TTL = Number(process.env.CABINET_SESSION_TTL_MS || 14 * 24 * 60 * 60 * 1000);
 const CABINET_DATABASE_URL = process.env.CABINET_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || '';
@@ -579,6 +580,50 @@ function parseCookies(req) {
     }).filter(([key]) => key));
 }
 
+function toBase64Url(value) {
+    return Buffer.from(String(value), 'utf8').toString('base64url');
+}
+
+function signCabinetSessionPayload(payload) {
+    return crypto
+        .createHmac('sha256', CABINET_SESSION_SECRET)
+        .update(payload)
+        .digest('base64url');
+}
+
+function createStatelessCabinetSessionToken(phone, accounts, expiresAt) {
+    const payload = toBase64Url(JSON.stringify({
+        v: 1,
+        phone,
+        accounts: Array.isArray(accounts) ? accounts : [],
+        expiresAt
+    }));
+    const signature = signCabinetSessionPayload(payload);
+    return `stateless.${payload}.${signature}`;
+}
+
+function parseStatelessCabinetSessionToken(token) {
+    const parts = String(token || '').split('.');
+    if (parts.length !== 3 || parts[0] !== 'stateless') return null;
+    const payload = parts[1];
+    const signature = parts[2];
+    if (signCabinetSessionPayload(payload) !== signature) return null;
+    try {
+        const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+        if (!parsed || typeof parsed !== 'object') return null;
+        const expiresAt = Number(parsed.expiresAt) || 0;
+        if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
+        return {
+            token,
+            phone: normalizePhone(parsed.phone),
+            accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
+            expiresAt
+        };
+    } catch (_) {
+        return null;
+    }
+}
+
 function getListPropertyValue(element, propName) {
     if (!element || !propName) return undefined;
     const variants = [
@@ -972,9 +1017,11 @@ async function createCabinetSession(phone, accounts) {
 }
 
 async function getCabinetSession(req) {
-    await cleanupCabinetStores();
     const token = parseCookies(req).cabinet_session;
     if (!token) return null;
+    const statelessSession = parseStatelessCabinetSessionToken(token);
+    if (statelessSession) return statelessSession;
+    await cleanupCabinetStores();
     if (hasCabinetDbConfig()) {
         await ensureCabinetDbSchema();
         const { rows } = await queryCabinetDb(`
@@ -1094,7 +1141,8 @@ async function handleCabinetAuth(req, res, pathname) {
         }
 
         if (allowPartnerPicker) {
-            const session = await createCabinetSession(phone, accounts);
+            const expiresAt = Date.now() + CABINET_SESSION_TTL;
+            const token = createStatelessCabinetSessionToken(phone, accounts, expiresAt);
             sendJsonWithHeaders(res, 200, {
                 ok: true,
                 autoLogin: true,
@@ -1102,7 +1150,7 @@ async function handleCabinetAuth(req, res, pathname) {
                 canChoosePartner: true,
                 accounts
             }, {
-                'Set-Cookie': cabinetCookie(session.token, session.expiresAt)
+                'Set-Cookie': cabinetCookie(token, expiresAt)
             });
             return;
         }
