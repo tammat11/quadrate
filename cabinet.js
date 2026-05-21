@@ -1150,11 +1150,30 @@ function syncManagementScrollbars() {
             const grid = wrap.querySelector('.cabinet-management-grid');
             if (!scrollbar || !scrollbarInner || !grid) return;
 
+            let syncingFromWrap = false;
+            let syncingFromScrollbar = false;
+            let wrapFrame = 0;
+            let scrollbarFrame = 0;
+
             const syncFromWrap = () => {
-                if (scrollbar.scrollLeft !== wrap.scrollLeft) scrollbar.scrollLeft = wrap.scrollLeft;
+                if (syncingFromScrollbar) return;
+                if (wrapFrame) cancelAnimationFrame(wrapFrame);
+                wrapFrame = requestAnimationFrame(() => {
+                    wrapFrame = 0;
+                    syncingFromWrap = true;
+                    if (scrollbar.scrollLeft !== wrap.scrollLeft) scrollbar.scrollLeft = wrap.scrollLeft;
+                    syncingFromWrap = false;
+                });
             };
             const syncFromScrollbar = () => {
-                if (wrap.scrollLeft !== scrollbar.scrollLeft) wrap.scrollLeft = scrollbar.scrollLeft;
+                if (syncingFromWrap) return;
+                if (scrollbarFrame) cancelAnimationFrame(scrollbarFrame);
+                scrollbarFrame = requestAnimationFrame(() => {
+                    scrollbarFrame = 0;
+                    syncingFromScrollbar = true;
+                    if (wrap.scrollLeft !== scrollbar.scrollLeft) wrap.scrollLeft = scrollbar.scrollLeft;
+                    syncingFromScrollbar = false;
+                });
             };
             const refreshMetrics = () => {
                 const contentWidth = Math.max(grid.scrollWidth, wrap.scrollWidth);
