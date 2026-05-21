@@ -928,7 +928,10 @@ function renderManagementHierarchyTable(rows = []) {
     const gridTemplate = columnWidths.join(' ');
 
     return `
-        <div class="cabinet-management-table-wrap" role="region" aria-label="Таблица управленки">
+        <div class="cabinet-management-scrollbar" data-management-scrollbar hidden aria-hidden="true">
+            <div class="cabinet-management-scrollbar-inner" data-management-scrollbar-inner></div>
+        </div>
+        <div class="cabinet-management-table-wrap" data-management-table-wrap role="region" aria-label="Таблица управленки">
             <div class="cabinet-management-grid" role="table" style="--management-grid-template: ${gridTemplate};">
                 <div class="cabinet-management-row is-head" role="row">
                     ${columns.map(([label]) => `<div class="cabinet-management-cell" role="columnheader">${DashboardApp.escapeHtml(label)}</div>`).join('')}
@@ -1000,7 +1003,11 @@ function renderManagementPane(row) {
         <section class="cabinet-breakdown-card cabinet-breakdown-wide cabinet-management-report">
             <div class="cabinet-breakdown-head">
                 <div class="cabinet-breakdown-title">Управленка</div>
-                <div class="cabinet-management-month">Месяц начисления: <strong>${DashboardApp.escapeHtml(monthLabel)}</strong></div>
+                <div class="cabinet-management-month">Месяц начисления</div>
+            </div>
+            <div class="cabinet-management-period">
+                <span>Месяц начисления</span>
+                <strong>${DashboardApp.escapeHtml(monthLabel)}</strong>
             </div>
             <p class="cabinet-breakdown-intro">Данные из view <code>Marja_full</code>.</p>
             <div class="cabinet-management-summary">
@@ -1009,10 +1016,6 @@ function renderManagementPane(row) {
                     <div class="cabinet-management-summary-sub">${DashboardApp.escapeHtml(`${DashboardApp.formatMetricNumber(managementPoints, 0)} из 10`)}</div>
                 </div>
                 <div class="cabinet-management-summary-cards">
-                    <div class="cabinet-management-summary-card">
-                        <span>Месяц начисления</span>
-                        <strong>${DashboardApp.escapeHtml(monthLabel)}</strong>
-                    </div>
                     <div class="cabinet-management-summary-card">
                         <span>Маржа %</span>
                         <strong>${DashboardApp.escapeHtml(DashboardApp.formatPercent(marginShare, 0))}</strong>
@@ -1069,6 +1072,7 @@ function renderCabinetRows(rows) {
         .join('');
     renderExplainedDetails(row);
     if (managementPane) managementPane.innerHTML = renderManagementPane(row);
+    syncManagementScrollbars();
 }
 
 function renderCabinetPartnerPicker(options = []) {
@@ -1130,6 +1134,49 @@ cabinetDetailsExplained.addEventListener('click', event => {
         renderExplainedDetails(activeCabinetRow);
     }
 });
+
+function syncManagementScrollbars() {
+    const roots = [cabinetDetailsExplained, managementPane].filter(Boolean);
+    for (const root of roots) {
+        root.querySelectorAll('[data-management-table-wrap]').forEach(wrap => {
+            const scrollbar = wrap.parentElement?.querySelector?.('[data-management-scrollbar]');
+            const scrollbarInner = scrollbar?.querySelector?.('[data-management-scrollbar-inner]');
+            const grid = wrap.querySelector('.cabinet-management-grid');
+            if (!scrollbar || !scrollbarInner || !grid) return;
+
+            const syncFromWrap = () => {
+                if (scrollbar.scrollLeft !== wrap.scrollLeft) scrollbar.scrollLeft = wrap.scrollLeft;
+            };
+            const syncFromScrollbar = () => {
+                if (wrap.scrollLeft !== scrollbar.scrollLeft) wrap.scrollLeft = scrollbar.scrollLeft;
+            };
+            const refreshMetrics = () => {
+                const contentWidth = Math.max(grid.scrollWidth, wrap.scrollWidth);
+                scrollbarInner.style.width = `${contentWidth}px`;
+                const hasOverflow = contentWidth > wrap.clientWidth + 4;
+                scrollbar.hidden = !hasOverflow;
+                scrollbar.setAttribute('aria-hidden', hasOverflow ? 'false' : 'true');
+                if (!hasOverflow) {
+                    wrap.scrollLeft = 0;
+                    scrollbar.scrollLeft = 0;
+                } else {
+                    syncFromWrap();
+                }
+            };
+
+            if (!wrap.dataset.managementScrollBound) {
+                wrap.addEventListener('scroll', syncFromWrap, { passive: true });
+                scrollbar.addEventListener('scroll', syncFromScrollbar, { passive: true });
+                wrap.dataset.managementScrollBound = '1';
+            }
+
+            refreshMetrics();
+            requestAnimationFrame(refreshMetrics);
+        });
+    }
+}
+
+window.addEventListener('resize', () => syncManagementScrollbars());
 
 async function loadCabinetData(forceRefresh = false) {
     if (!currentSession) return;

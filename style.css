@@ -916,7 +916,7 @@ th.matrix-col-summary {
 }
 
 .cabinet-shell {
-    width: min(1180px, calc(100% - 2rem));
+    width: min(1480px, calc(100% - 1.25rem));
     margin: 0 auto;
     padding: 2.4rem 0 3rem;
 }
@@ -1522,20 +1522,11 @@ th.matrix-col-summary {
 }
 
 .cabinet-management-month {
-    margin-bottom: 0.7rem;
-    padding: 0.45rem 0.7rem;
-    border: 1px solid rgba(106, 149, 44, 0.18);
-    border-radius: 999px;
-    background: rgba(241, 248, 228, 0.9);
-    color: #5b7f1d;
-    font-size: 0.82rem;
-    font-weight: 850;
-    white-space: nowrap;
-}
-
-.cabinet-management-month strong {
-    color: #111111;
+    color: var(--text-soft);
+    font-size: 0.76rem;
     font-weight: 950;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
 }
 
 .cabinet-breakdown-rows {
@@ -1722,6 +1713,35 @@ th.matrix-col-summary {
     margin-top: 0.75rem;
 }
 
+.cabinet-management-period {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.85rem;
+    margin-top: 0.75rem;
+    padding: 0.95rem 1rem;
+    border: 1px solid rgba(162, 192, 55, 0.18);
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(162, 192, 55, 0.08), rgba(255, 255, 255, 0.98));
+}
+
+.cabinet-management-period span {
+    color: var(--text-soft);
+    font-size: 0.76rem;
+    font-weight: 950;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.cabinet-management-period strong {
+    color: #111111;
+    font-size: 1.12rem;
+    font-weight: 950;
+    letter-spacing: -0.03em;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
 .cabinet-management-summary-score {
     padding: 0.9rem 1rem;
     border: 1px solid rgba(123, 133, 167, 0.1);
@@ -1747,7 +1767,7 @@ th.matrix-col-summary {
 
 .cabinet-management-summary-cards {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.65rem;
 }
 
@@ -1775,6 +1795,19 @@ th.matrix-col-summary {
     font-variant-numeric: tabular-nums;
 }
 
+.cabinet-management-scrollbar {
+    margin-top: 0.9rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border: 1px solid rgba(123, 133, 167, 0.12);
+    border-radius: 999px;
+    background: #f7f8f4;
+}
+
+.cabinet-management-scrollbar-inner {
+    height: 14px;
+}
+
 .cabinet-management-table-wrap {
     margin-top: 0.9rem;
     max-width: 100%;
@@ -1785,6 +1818,31 @@ th.matrix-col-summary {
     border-radius: 8px;
     background: #fff;
     overscroll-behavior-x: contain;
+}
+
+.cabinet-management-scrollbar::-webkit-scrollbar,
+.cabinet-management-table-wrap::-webkit-scrollbar {
+    height: 14px;
+}
+
+.cabinet-management-scrollbar::-webkit-scrollbar-track,
+.cabinet-management-table-wrap::-webkit-scrollbar-track {
+    background: rgba(123, 133, 167, 0.1);
+    border-radius: 999px;
+}
+
+.cabinet-management-scrollbar::-webkit-scrollbar-thumb,
+.cabinet-management-table-wrap::-webkit-scrollbar-thumb {
+    background: rgba(123, 133, 167, 0.42);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+.cabinet-management-scrollbar::-webkit-scrollbar-thumb:hover,
+.cabinet-management-table-wrap::-webkit-scrollbar-thumb:hover {
+    background: rgba(123, 133, 167, 0.58);
+    background-clip: padding-box;
 }
 
 .cabinet-management-table {
@@ -1829,9 +1887,9 @@ th.matrix-col-summary {
     left: 0;
     inset-inline-start: 0;
     z-index: 10;
-    width: 420px;
-    min-width: 420px;
-    max-width: 420px;
+    width: 360px;
+    min-width: 360px;
+    max-width: 360px;
     background: #fff;
     background-clip: padding-box;
     box-shadow: 1px 0 0 rgba(47, 52, 143, 0.16);
