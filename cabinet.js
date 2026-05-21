@@ -414,6 +414,11 @@ function renderSectionFocusContent(sectionKey, breakdown) {
 }
 
 function renderSectionFocusContentWithRow(row, sectionKey, breakdown) {
+    const managementRows = breakdown.upravlenka?.rows || [];
+    const managementSummary = breakdown.upravlenka?.summary || {};
+    const managementMonthLabel = managementSummary.latestMonthKey
+        ? DashboardApp.formatMonthLabel(managementSummary.latestMonthKey)
+        : (managementRows[0]?.monthLabel || 'Выбранный месяц');
     const sectionMap = {
         calls: {
             title: 'Обзвон',
@@ -445,10 +450,10 @@ function renderSectionFocusContentWithRow(row, sectionKey, breakdown) {
         },
         upravlenka: {
             title: 'Управленка',
-            intro: CABINET_METRIC_META.upravlenka.plain,
+            intro: `${CABINET_METRIC_META.upravlenka.plain} Месяц начисления: ${managementMonthLabel}.`,
             score: breakdown.upravlenka?.score,
-            lines: [],
-            body: renderManagementRows(breakdown.upravlenka?.rows || [])
+            lines: [`Месяц начисления: ${managementMonthLabel}`],
+            body: renderManagementRows(managementRows)
         },
         clockster: {
             title: 'Клостер',
@@ -1132,6 +1137,7 @@ cabinetDetailsExplained.addEventListener('click', event => {
     activeBreakdownFocus = nextFocus;
     if (activeCabinetRow) {
         renderExplainedDetails(activeCabinetRow);
+        syncManagementScrollbars();
     }
 });
 
