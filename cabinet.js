@@ -46,7 +46,7 @@ const CABINET_METRIC_META = {
         plain: 'Аудиты качества.',
         good: 'Норма.',
         watch: 'Контроль.',
-        bad: 'Просадка.'
+        bad: 'Нет сделок.'
     },
     realization: {
         plain: 'ФОТ и деньги.',
