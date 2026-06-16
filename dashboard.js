@@ -65,34 +65,35 @@ const MANUAL_DISCIPLINE_LIMITS = {
 };
 const REMARKS_RELIEF_MAX = 0.35;
 const CLOCKSTER_PARTNER_TO_USER = {
-    '3421309': 566091,
-    '2362011': 474121,
-    '2362007': 553792,
-    '2361995': 558744,
-    '3849905': 559053,
-    '2361999': 558252,
-    '2362025': 594445,
-    '2362021': 559063,
-    '2362017': 545732,
-    '2361991': 552826,
-    '2362005': 553469,
-    '2362041': 550874,
-    '2362015': 550288,
-    '2362019': 549431,
-    '2362031': 558295,
-    '2362003': 565933,
-    '2362009': 558807,
-    '2362013': 554970,
-    '2362033': 559610,
-    '3144937': 556023,
-    '3370865': 578019,
-    '2362029': 579840,
-    '3960581': 614391,
-    '2361989': 558240,
-    '2362027': 570178,
-    '2361997': 558236
+    '3421309': [566091],
+    '2362011': [474121],
+    '2362007': [553792],
+    '2361995': [558744],
+    '3849905': [559053, 562504, 573949], // Жандос Альсейтов + Лейла Басуева + Сембаева Шынар
+    '2361999': [558252], // Нургуль Бажкенова в Clockster пока не найдена
+    '2362025': [594445],
+    '2362021': [559063],
+    '2362017': [545732],
+    '2361991': [552826],
+    '2362005': [553469, 557891], // Жапабаева Б. + Алдыбаева Ажаргуль
+    '2362041': [550874],
+    '2362015': [550288, 622397], // Кабиева А. + Макканбаева Севара
+    '2362019': [549431],
+    '2362031': [558295, 638455], // Полоз О. + Амирбекова Гулмира
+    '2362003': [565933],
+    '2362009': [558807],
+    '2362013': [554970, 562762], // Исмагамбетов Марат: брать оба аккаунта
+    '2362033': [559610],
+    '3144937': [556023],
+    '3370865': [578019],
+    '2362029': [579840],
+    '3960581': [614391],
+    '2361989': [558240],
+    '2362027': [570178],
+    '2361997': [558236]
 };
 const CLOCKSTER_HOURS_BASED_PARTNERS = new Set(['3370865', '2362023']);
+const CLOCKSTER_CHECKS_BASED_PARTNERS = new Set(['2362005']);
 const CALLS_SCORE_FIELDS = [
     {
         field: 'UF_CRM_173_1771396927',
@@ -1184,6 +1185,10 @@ function usesHoursBasedClockster(pid) {
     return CLOCKSTER_HOURS_BASED_PARTNERS.has(String(pid));
 }
 
+function usesChecksBasedClockster(pid) {
+    return CLOCKSTER_CHECKS_BASED_PARTNERS.has(String(pid));
+}
+
 function normalizeHumanName(name = '') {
     return String(name)
         .toLowerCase()
@@ -1405,7 +1410,12 @@ function getFotDbStats(pid) {
 }
 
 async function fetchClocksterAttendanceReport(monthKey) {
-    const userIds = Object.values(CLOCKSTER_PARTNER_TO_USER);
+    const userIds = [...new Set(
+        Object.values(CLOCKSTER_PARTNER_TO_USER)
+            .flatMap(value => Array.isArray(value) ? value : [value])
+            .map(value => String(value).trim())
+            .filter(Boolean)
+    )];
     if (userIds.length === 0) return [];
 
     const range = getMonthDateRange(monthKey);
@@ -1477,17 +1487,25 @@ function normalizeClocksterLocationKey(value) {
 }
 
 function buildClocksterMetrics(reportRows) {
-    const userIdToPartnerId = Object.fromEntries(
-        Object.entries(CLOCKSTER_PARTNER_TO_USER).map(([partnerId, userId]) => [String(userId), String(partnerId)])
-    );
+    const userIdToPartnerIds = {};
+    for (const [partnerId, rawUserIds] of Object.entries(CLOCKSTER_PARTNER_TO_USER)) {
+        const userIds = Array.isArray(rawUserIds) ? rawUserIds : [rawUserIds];
+        for (const userId of userIds) {
+            const key = String(userId).trim();
+            if (!key) continue;
+            if (!userIdToPartnerIds[key]) userIdToPartnerIds[key] = [];
+            userIdToPartnerIds[key].push(String(partnerId));
+        }
+    }
     const metrics = {};
 
     for (const row of reportRows) {
         const clocksterUserId = String(row?.user?.id ?? '');
-        const partnerId = userIdToPartnerId[clocksterUserId];
-        if (!partnerId) continue;
+        const partnerIds = userIdToPartnerIds[clocksterUserId];
+        if (!partnerIds?.length) continue;
 
         let uniqueObjectVisits = 0;
+        let totalChecks = 0;
         let spentHours = 0;
         const uniqueCoveredObjects = new Set();
         const visitedLocationKeys = new Set();
@@ -1496,6 +1514,7 @@ function buildClocksterMetrics(reportRows) {
         for (const [dateKey, dateData] of Object.entries(dates)) {
             const attendance = Array.isArray(dateData?.attendance) ? dateData.attendance.slice() : [];
             if (attendance.length === 0) continue;
+            totalChecks += attendance.length;
 
             attendance.sort((a, b) => String(a?.datetime || '').localeCompare(String(b?.datetime || '')));
             const perLocation = new Map();
@@ -1533,12 +1552,32 @@ function buildClocksterMetrics(reportRows) {
             }
         }
 
+        for (const partnerId of partnerIds) {
+            if (!metrics[partnerId]) {
+                metrics[partnerId] = {
+                    visits: 0,
+                    checks: 0,
+                    hours: 0,
+                    uniqueObjectsSet: new Set(),
+                    locationKeysSet: new Set()
+                };
+            }
+            metrics[partnerId].visits += uniqueObjectVisits;
+            metrics[partnerId].checks += totalChecks;
+            metrics[partnerId].hours += spentHours;
+            for (const objectId of uniqueCoveredObjects) metrics[partnerId].uniqueObjectsSet.add(objectId);
+            for (const locationKey of visitedLocationKeys) metrics[partnerId].locationKeysSet.add(locationKey);
+        }
+    }
+
+    for (const [partnerId, metric] of Object.entries(metrics)) {
         metrics[partnerId] = {
-            visits: uniqueObjectVisits,
-            hours: spentHours,
-            uniqueObjects: uniqueCoveredObjects.size,
-            objectIds: [...uniqueCoveredObjects],
-            locationKeys: [...visitedLocationKeys]
+            visits: metric.visits,
+            checks: metric.checks,
+            hours: metric.hours,
+            uniqueObjects: metric.uniqueObjectsSet.size,
+            objectIds: [...metric.uniqueObjectsSet],
+            locationKeys: [...metric.locationKeysSet]
         };
     }
 
@@ -2176,7 +2215,7 @@ function getAuditQ(pid) {
 }
 function getUpravlenkaQ(pid) {
     const record = managementScoresByPartner[String(pid)];
-    return record ? record.score : 1.0;
+    return record ? record.score : 0;
 }
 function getClocksterQ(pid) {
     const totalObjects = deals69.reduce((sum, deal) => {
@@ -2189,6 +2228,10 @@ function getClocksterQ(pid) {
 
     if (usesHoursBasedClockster(pid)) {
         return Math.min(1, metric.hours / totalObjects);
+    }
+
+    if (usesChecksBasedClockster(pid)) {
+        return Math.min(1, (metric.checks ?? 0) / totalObjects);
     }
 
     return Math.min(1, (metric.visits ?? 0) / totalObjects);
@@ -2399,12 +2442,13 @@ function getUpravlenkaMetricDetail(pid) {
         digits: 0,
         displayValue: qValue,
         sub: `${formatMetricNumber(points, 0)} из 10`,
-        title: `Q управленки: ${formatPercent(qValue, 0)}; балл: ${formatMetricNumber(points, 0)} из 10; строк: ${formatMetricNumber(rowCount, 0)}`,
+        title: `Маржа %: ${formatPercent(marginShare, 2)}; Q управленки: ${formatPercent(qValue, 0)}; балл: ${formatMetricNumber(points, 0)} из 10; строк: ${formatMetricNumber(rowCount, 0)}`,
         calcLines: [
             `Строк в отчёте: ${formatMetricNumber(rowCount, 0)}`,
             `Формула Power BI: Маржа партнёра / Реализация без НДС`,
             `Реализация без НДС: ${formatMoneyShort(summary.revenueNetSum || 0)}`,
             `Маржа партнёра: ${formatMoneyShort(summary.partnerMarginSum || 0)}`,
+            `Маржа %: ${formatPercent(marginShare, 2)}`,
             `Балл по шкале: ${formatMetricNumber(points, 0)} из 10`,
             `Q управленки: ${formatPercent(qValue, 0)}`
         ]
@@ -2424,6 +2468,22 @@ function getClocksterMetricDetail(pid) {
             title: `Часы на объектах: ${formatMetricNumber(hours, 1)}, объектов в 69: ${formatMetricNumber(totalObjects, 0)}`,
             calcLines: [
                 `Часы на объектах: ${formatMetricNumber(hours, 1)}`,
+                `Объектов в 69: ${formatMetricNumber(totalObjects, 0)}`
+            ]
+        };
+    }
+
+    if (usesChecksBasedClockster(pid)) {
+        const checks = metric?.checks ?? 0;
+        const uniqueObjects = metric?.uniqueObjects ?? 0;
+        return {
+            format: 'percent',
+            digits: 0,
+            sub: `${formatMetricNumber(checks, 0)}/${formatMetricNumber(totalObjects, 0)}`,
+            title: `Всего чеков: ${formatMetricNumber(checks, 0)}, уникальных объектов: ${formatMetricNumber(uniqueObjects, 0)}, объектов в 69: ${formatMetricNumber(totalObjects, 0)}`,
+            calcLines: [
+                `Чеков всего: ${formatMetricNumber(checks, 0)}`,
+                `Уникальных объектов: ${formatMetricNumber(uniqueObjects, 0)}`,
                 `Объектов в 69: ${formatMetricNumber(totalObjects, 0)}`
             ]
         };
@@ -2598,7 +2658,8 @@ function buildPartnerBreakdown(pid, rowData = null) {
             lines: managementRecord
                 ? [
                     `Строк в отчёте: ${(managementSummaryByPartner[String(pid)]?.rowCount) || 0}`,
-                    `Средняя маржа: ${formatPercent(managementRecord.score, 0)}`,
+                    `Маржа %: ${formatPercent(managementSummaryByPartner[String(pid)]?.marginShare || 0, 2)}`,
+                    `Q управленки: ${formatPercent(managementRecord.score, 0)}`,
                     `Последнее обновление: ${managementRecord.updatedAt || 'без даты'}`
                 ]
                 : ['Оценка за выбранный месяц пока не заполнена.']
@@ -2610,6 +2671,12 @@ function buildPartnerBreakdown(pid, rowData = null) {
             lines: usesHoursBasedClockster(pid)
                 ? [
                     `Часы на объектах: ${formatMetricNumber(clocksterMetric?.hours || 0, 1)}`,
+                    `Реализация: ${formatMetricNumber(row?.dealsCount || 0, 0)}`
+                ]
+                : usesChecksBasedClockster(pid)
+                ? [
+                    `Чеков всего: ${formatMetricNumber(clocksterMetric?.checks || 0, 0)}`,
+                    `Уникальных объектов: ${formatMetricNumber(clocksterMetric?.uniqueObjects || 0, 0)}`,
                     `Реализация: ${formatMetricNumber(row?.dealsCount || 0, 0)}`
                 ]
                 : [

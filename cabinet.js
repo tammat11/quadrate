@@ -450,9 +450,9 @@ function renderSectionFocusContentWithRow(row, sectionKey, breakdown) {
         },
         upravlenka: {
             title: 'Управленка',
-            intro: `${CABINET_METRIC_META.upravlenka.plain} Месяц начисления: ${managementMonthLabel}.`,
+            intro: CABINET_METRIC_META.upravlenka.plain,
             score: breakdown.upravlenka?.score,
-            lines: [`Месяц начисления: ${managementMonthLabel}`],
+            lines: managementRows.length ? [`Месяц начисления: ${managementMonthLabel}`] : [],
             body: renderManagementRows(managementRows)
         },
         clockster: {
@@ -487,7 +487,9 @@ function renderSectionFocusContentWithRow(row, sectionKey, breakdown) {
     const section = sectionMap[sectionKey] || sectionMap.calls;
     const detail = row?.details?.[sectionKey] || {};
     const scoreValue = Number(section.score ?? row?.q?.[sectionKey] ?? 0);
-    const scoreText = detail?.displayText
+    const scoreText = (sectionKey === 'upravlenka' && detail?.sub === 'нет оценки')
+        ? '—'
+        : detail?.displayText
         || (detail?.format === 'percent' ? DashboardApp.formatPercent(scoreValue, detail?.digits ?? 0) : DashboardApp.formatMetricNumber(scoreValue, detail?.digits ?? 2));
     const scoreSub = detail?.sub || '';
     const scoreCalcLines = sectionKey === 'upravlenka'
@@ -971,7 +973,7 @@ function renderManagementHierarchyTable(rows = []) {
 function renderManagementRows(rows = []) {
     const normalized = (rows || []).filter(Boolean);
     if (!normalized.length) {
-        return '<div class="cabinet-management-empty">За выбранный месяц строк в управленке нет.</div>';
+        return '<div class="cabinet-management-empty">За выбранный месяц данных по управленке нет.</div>';
     }
 
     return `

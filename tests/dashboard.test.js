@@ -1082,8 +1082,55 @@ test('buildClocksterMetrics не удваивает визит на одном �
         }
     ]);
 
-    assert.deepEqual(metrics['3370865'], { visits: 1, hours: 9, uniqueObjects: 1, objectIds: ['obj-1'], locationKeys: ['obj1'] });
-    assert.deepEqual(metrics['2361999'], { visits: 3, hours: 10, uniqueObjects: 2, objectIds: ['obj-2', 'obj-3'], locationKeys: ['obj2', 'obj3'] });
+    assert.deepEqual(metrics['3370865'], { visits: 1, checks: 2, hours: 9, uniqueObjects: 1, objectIds: ['obj-1'], locationKeys: ['obj1'] });
+    assert.deepEqual(metrics['2361999'], { visits: 3, checks: 9, hours: 10, uniqueObjects: 2, objectIds: ['obj-2', 'obj-3'], locationKeys: ['obj2', 'obj3'] });
+});
+
+test('buildClocksterMetrics суммирует чеки партнера и куратора для одного партнера', () => {
+    const metrics = dashboard.buildClocksterMetrics([
+        {
+            user: { id: 559053 },
+            dates: {
+                '2026-03-10': {
+                    attendance: [
+                        { status: 1, datetime: '2026-03-10T09:00:00+05:00', location: { id: 'obj-1', title: 'Obj 1' } },
+                        { status: 0, datetime: '2026-03-10T18:00:00+05:00', location: { id: 'obj-1', title: 'Obj 1' } }
+                    ]
+                }
+            }
+        },
+        {
+            user: { id: 562504 },
+            dates: {
+                '2026-03-11': {
+                    attendance: [
+                        { status: 1, datetime: '2026-03-11T10:00:00+05:00', location: { id: 'obj-2', title: 'Obj 2' } },
+                        { status: 0, datetime: '2026-03-11T12:00:00+05:00', location: { id: 'obj-2', title: 'Obj 2' } }
+                    ]
+                }
+            }
+        },
+        {
+            user: { id: 573949 },
+            dates: {
+                '2026-03-11': {
+                    attendance: [
+                        { status: 1, datetime: '2026-03-11T13:00:00+05:00', location: { id: 'obj-3', title: 'Obj 3' } },
+                        { status: 0, datetime: '2026-03-11T16:00:00+05:00', location: { id: 'obj-3', title: 'Obj 3' } }
+                    ]
+                }
+            }
+        }
+    ]);
+
+    assert.deepEqual(metrics['3849905'], {
+        visits: 3,
+        checks: 6,
+        hours: 14,
+        uniqueObjects: 3,
+        objectIds: ['obj-1', 'obj-2', 'obj-3'],
+        locationKeys: ['obj1', 'obj2', 'obj3']
+    });
 });
 
 test('getClocksterQ для обычных партнеров считает дедуп по Адрес+Дата, а для особых часы', () => {
@@ -1108,6 +1155,20 @@ test('getClocksterQ для обычных партнеров считает де
 
     assert.equal(dashboard.getClocksterQ('2361999'), 1);
     assert.equal(dashboard.getClocksterQ('3370865'), 0.5);
+});
+
+test('getClocksterQ для Жапабаевой берет все чеки partner + curator', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            '2362005': 'Жапабаева Б.'
+        },
+        deals69: Array.from({ length: 50 }, () => ({ UF_CRM_1743669674: '2362005' })),
+        clocksterMetricsByPartner: {
+            '2362005': { visits: 2, checks: 256, hours: 0, uniqueObjects: 1 }
+        }
+    });
+
+    assert.equal(dashboard.getClocksterQ('2362005'), 1);
 });
 
 test('getClocksterQ возвращает 0, если объекты есть, а метрик Clockster нет', () => {
