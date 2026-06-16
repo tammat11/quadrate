@@ -302,7 +302,7 @@ test('управленка переводит Маржа % в Q по шкале 
 test('buildIndexes связывает Marja_full по ответственному лицу ИП', () => {
     global.document = {
         getElementById(id) {
-            if (id === 'monthSelect') return { value: '2026-03' };
+            if (id === 'monthSelect') return { value: '2026-04' };
             return null;
         }
     };
@@ -335,10 +335,10 @@ test('buildIndexes связывает Marja_full по ответственном
     assert.equal(dashboard.getUpravlenkaQ('p1'), 0);
 });
 
-test('buildIndexes фильтрует Marja_full строго по Месяц_начисления', () => {
+test('buildIndexes для управленки берет предыдущий месяц начисления', () => {
     global.document = {
         getElementById(id) {
-            if (id === 'monthSelect') return { value: '2026-03' };
+            if (id === 'monthSelect') return { value: '2026-05' };
             return null;
         }
     };
@@ -351,15 +351,15 @@ test('buildIndexes фильтрует Marja_full строго по Месяц_н
             {
                 external_id: 1,
                 'Ответственное_лицо_ИП_инфо': 'Айткулова А.',
-                'Месяц_начисления': '2026-03-31T19:00:00.000Z',
+                'Месяц_начисления': '2026-04-15T00:00:00.000Z',
                 'Реализация без НДС': 100000,
                 'Маржа': 0.7
             },
             {
                 external_id: 2,
                 'Ответственное_лицо_ИП_инфо': 'Айткулова А.',
-                'Месяц_начисления': '2026-04-01T00:00:00.000Z',
-                period: '2026-03',
+                'Месяц_начисления': '2026-05-01T00:00:00.000Z',
+                period: '2026-05',
                 'Реализация без НДС': 100000,
                 'Маржа': 0.2
             }
@@ -370,6 +370,7 @@ test('buildIndexes фильтрует Marja_full строго по Месяц_н
 
     assert.equal(dashboard.getManagementRowsForPartner('p1').length, 1);
     assert.equal(dashboard.getManagementSummaryForPartner('p1').managementPoints, 0);
+    assert.equal(dashboard.getManagementRowsForPartner('p1')[0].monthKey, '2026-04');
     assert.equal(dashboard.getUpravlenkaQ('p1'), 0);
 });
 

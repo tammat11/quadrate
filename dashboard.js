@@ -1256,6 +1256,12 @@ function getFotDbMonthsForSelection(selectedMonth = getSelectedMonth()) {
     return [shiftMonthKey(selectedMonth, FOT_DB_MONTH_SHIFT)].filter(Boolean);
 }
 
+function getManagementMonthForSelection(selectedMonth = getSelectedMonth()) {
+    if (selectedMonth === 'all') return 'all';
+    if (isSummaryFilter(selectedMonth)) return selectedMonth;
+    return shiftMonthKey(selectedMonth, -1) || selectedMonth;
+}
+
 function buildFotDbIndexes() {
     fotDbStatsByPartnerMonth = {};
 
@@ -1877,6 +1883,7 @@ function getManagementMarginQ(marginRate) {
 
 function buildIndexes() {
     const selectedMonth = getSelectedMonth();
+    const managementMonth = getManagementMonthForSelection(selectedMonth);
     const callsMonths = getCallsReportMonths(selectedMonth);
     remarkMetricsByPartner = buildRemarkMetrics(selectedMonth);
     remarksReliefBenchmark = buildComplexityBenchmark(
@@ -1955,7 +1962,7 @@ function buildIndexes() {
         const itemMonth = hasLegacyFields
             ? extractDealMonthKey(item, [FIELDS.OPU_MONTH, 'CREATED_TIME', 'UPDATED_TIME'])
             : getManagementMonthKey(item);
-        if (!doesMonthMatchSelection(itemMonth, selectedMonth)) continue;
+        if (!doesMonthMatchSelection(itemMonth, managementMonth)) continue;
 
         const legacyScore = parseFloat(getFieldValue(item, FIELDS.MGMT_SCORE));
         const rawScore = hasLegacyFields ? legacyScore : parseFloat(getFieldValue(item, 'Маржа'));
@@ -3604,7 +3611,7 @@ async function loadDashboard(options = {}) {
             clocksterMetricsCache = {};
             try { localStorage.removeItem(CACHE_KEY); } catch (_) {}
         }
-        const managementReportPromise = fetchManagementReport(requestedMonth)
+        const managementReportPromise = fetchManagementReport(getManagementMonthForSelection(requestedMonth))
             .catch(error => {
                 console.warn('fetchManagementReport failed:', error?.message || error);
                 return { rows: [] };
