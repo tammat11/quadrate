@@ -2107,7 +2107,231 @@ async function requestListener(req, res) {
         return;
     }
 
+    if (pathname === '/api/bitrix-app-config') {
+        await handleBitrixAppConfig(req, res);
+        return;
+    }
+
+    if (pathname.startsWith('/api/bitrix-app/')) {
+        await handleBitrixApp(req, res, pathname);
+        return;
+    }
+
     serveStatic(req, res);
+}
+
+// ——— Bitrix App ———
+
+const bitrixTokenCache = new Map(); // token → { userId, expiresAt }
+
+async function validateBitrixToken(token, domain) {
+    const cacheKey = `${domain}:${token}`;
+    const cached = bitrixTokenCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.userId;
+    const url = `https://${domain}/rest/user.current.json?auth=${encodeURIComponent(token)}`;
+    const upstream = await proxyRequest(url, { method: 'GET' });
+    if (upstream.statusCode !== 200) return null;
+    const parsed = JSON.parse(upstream.body || '{}');
+    if (!parsed.result?.ID) return null;
+    const userId = String(parsed.result.ID);
+    bitrixTokenCache.set(cacheKey, { userId, expiresAt: Date.now() + 5 * 60 * 1000 });
+    return userId;
+}
+
+async function getBitrixAppSession(req) {
+    const auth = (req.headers['authorization'] || '').replace(/^Bearer\s+/, '').trim();
+    const domain = (req.headers['x-bx-domain'] || '').trim();
+    if (!auth || !domain) return null;
+    const userId = await validateBitrixToken(auth, domain).catch(() => null);
+    if (!userId) return null;
+    return { userId, domain };
+}
+
+async function findPartnerByBitrixUserId(userId) {
+    if (!userId) return null;
+    if (hasCabinetDbConfig()) {
+        await ensureCabinetDbSchema();
+        const { rows } = await queryCabinetDb(
+            'SELECT * FROM cabinet_accounts WHERE employee_id = $1 LIMIT 1',
+            [String(userId)]
+        );
+        if (rows[0]?.partner_bitrix_id) return rows[0];
+    }
+    // Fallback: check in-memory cache
+    try {
+        const accountsByPhone = await getCabinetAccounts(false);
+        for (const accounts of Object.values(accountsByPhone)) {
+            const match = accounts.find(a => String(a.employeeId) === String(userId));
+            if (match) return { partner_bitrix_id: match.partnerBitrixId, employee_name: match.employeeName };
+        }
+    } catch {}
+    return null;
+}
+
+async function getAllPartners() {
+    try {
+        const accountsByPhone = await getCabinetAccounts(false);
+        const seen = new Set();
+        const partners = [];
+        for (const accounts of Object.values(accountsByPhone)) {
+            for (const a of accounts) {
+                if (a.partnerBitrixId && !seen.has(a.partnerBitrixId)) {
+                    seen.add(a.partnerBitrixId);
+                    partners.push({ id: a.partnerBitrixId, name: a.listElementName || a.employeeName || a.partnerBitrixId });
+                }
+            }
+        }
+        return partners.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    } catch {
+        return [];
+    }
+}
+
+async function handleBitrixAppConfig(req, res) {
+    const portalDomain = BITRIX_PORTAL_BASE
+        ? BITRIX_PORTAL_BASE.replace(/^https?:\/\//, '').replace(/\/$/, '')
+        : '';
+    sendJson(res, 200, { portalDomain });
+}
+
+async function handleBitrixApp(req, res, pathname) {
+    const sub = pathname.replace('/api/bitrix-app/', '');
+
+    if (sub === 'identify' && req.method === 'POST') {
+        const raw = await readRequestBody(req);
+        const body = JSON.parse(raw || '{}');
+        const domain = String(body.domain || '').trim();
+        const token = String(body.auth || '').trim();
+        if (!domain || !token) {
+            sendJson(res, 400, { error: 'auth and domain required' });
+            return;
+        }
+        const userId = await validateBitrixToken(token, domain).catch(() => null);
+        if (!userId) {
+            sendJson(res, 401, { error: 'Invalid Bitrix token' });
+            return;
+        }
+        const partnerRow = await findPartnerByBitrixUserId(userId);
+        const allPartners = partnerRow ? null : await getAllPartners();
+        sendJson(res, 200, {
+            userId,
+            partnerBitrixId: partnerRow?.partner_bitrix_id || null,
+            partnerName: partnerRow?.employee_name || partnerRow?.list_element_name || null,
+            allPartners
+        });
+        return;
+    }
+
+    if (sub === 'management-entries' || sub.startsWith('management-entries/')) {
+        const session = await getBitrixAppSession(req);
+        if (!session) {
+            sendJson(res, 401, { error: 'Unauthorized — provide Authorization: Bearer and X-BX-Domain headers' });
+            return;
+        }
+        if (!hasCabinetDbConfig()) {
+            sendJson(res, 503, { error: 'Database not configured' });
+            return;
+        }
+        await ensureCabinetDbSchema();
+
+        const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+        const partnerBitrixId = String(requestUrl.searchParams.get('partner_id') || '').trim();
+        if (!partnerBitrixId) {
+            sendJson(res, 400, { error: 'partner_id required' });
+            return;
+        }
+
+        if (req.method === 'GET') {
+            const month = String(requestUrl.searchParams.get('month') || '').trim();
+            let query = 'SELECT * FROM management_entries WHERE partner_bitrix_id = $1';
+            const params = [partnerBitrixId];
+            if (month && /^\d{4}-\d{2}$/.test(month)) {
+                query += ' AND month_key = $2';
+                params.push(month);
+            }
+            query += ' ORDER BY updated_at DESC';
+            const { rows } = await queryCabinetDb(query, params);
+            sendJson(res, 200, { entries: rows });
+            return;
+        }
+
+        if (req.method === 'POST') {
+            const raw = await readRequestBody(req);
+            const body = JSON.parse(raw || '{}');
+            const monthKey = String(body.month_key || '').trim();
+            if (!monthKey || !/^\d{4}-\d{2}$/.test(monthKey)) {
+                sendJson(res, 400, { error: 'Укажите корректный месяц (YYYY-MM)' });
+                return;
+            }
+            const nf = (key) => { const v = Number(body[key]); return Number.isFinite(v) ? v : 0; };
+            const fields = {
+                partner_bitrix_id: partnerBitrixId,
+                month_key: monthKey,
+                address: String(body.address || '').trim().slice(0, 500),
+                ip_name: String(body.ip_name || '').trim().slice(0, 300),
+                company_name: String(body.company_name || '').trim().slice(0, 300),
+                revenue_gross: nf('revenue_gross'), vat: nf('vat'),
+                fot_official: nf('fot_official'), fot_unofficial: nf('fot_unofficial'),
+                kaspi_jti: nf('kaspi_jti'), curators: nf('curators'),
+                pieceworkers: nf('pieceworkers'), self_employed: nf('self_employed'),
+                ums: nf('ums'), ums_els: nf('ums_els'),
+                eco_line_ums: nf('eco_line_ums'), gen_cleaning: nf('gen_cleaning'),
+                advances: nf('advances'), transport: nf('transport'),
+                equipment_rent: nf('equipment_rent'), goods: nf('goods'),
+                repairs: nf('repairs'), consulting: nf('consulting'),
+                equipment: nf('equipment'), payroll_taxes: nf('payroll_taxes'),
+                official_salary: nf('official_salary'), self_employed_taxes: nf('self_employed_taxes'),
+                ipn_kpn: nf('ipn_kpn'), buh_services: nf('buh_services'),
+                ip_expenses: nf('ip_expenses'),
+                note: String(body.note || '').trim().slice(0, 1000)
+            };
+            const entryId = body.id ? Number(body.id) : null;
+            if (entryId) {
+                const { rows: existing } = await queryCabinetDb(
+                    'SELECT id FROM management_entries WHERE id = $1 AND partner_bitrix_id = $2',
+                    [entryId, partnerBitrixId]
+                );
+                if (!existing.length) {
+                    sendJson(res, 404, { error: 'Запись не найдена' });
+                    return;
+                }
+                const updateKeys = Object.keys(fields).filter(k => k !== 'partner_bitrix_id');
+                const setClauses = updateKeys.map((k, i) => `${k} = $${i + 2}`).join(', ');
+                await queryCabinetDb(
+                    `UPDATE management_entries SET ${setClauses}, updated_at = NOW() WHERE id = $1`,
+                    [entryId, ...updateKeys.map(k => fields[k])]
+                );
+                const { rows } = await queryCabinetDb('SELECT * FROM management_entries WHERE id = $1', [entryId]);
+                sendJson(res, 200, { entry: rows[0] });
+            } else {
+                const keys = Object.keys(fields);
+                const { rows } = await queryCabinetDb(
+                    `INSERT INTO management_entries (${keys.join(', ')}) VALUES (${keys.map((_, i) => `$${i + 1}`).join(', ')}) RETURNING *`,
+                    keys.map(k => fields[k])
+                );
+                sendJson(res, 201, { entry: rows[0] });
+            }
+            return;
+        }
+
+        if (req.method === 'DELETE') {
+            const parts = pathname.split('/');
+            const id = Number(parts[parts.length - 1]);
+            if (!id) { sendJson(res, 400, { error: 'Missing id' }); return; }
+            const { rows } = await queryCabinetDb(
+                'DELETE FROM management_entries WHERE id = $1 AND partner_bitrix_id = $2 RETURNING id',
+                [id, partnerBitrixId]
+            );
+            if (!rows.length) { sendJson(res, 404, { error: 'Запись не найдена' }); return; }
+            sendJson(res, 200, { deleted: id });
+            return;
+        }
+
+        sendJson(res, 405, { error: 'Method not allowed' });
+        return;
+    }
+
+    sendJson(res, 404, { error: 'Not found' });
 }
 
 loadBootstrapCacheFromDisk();

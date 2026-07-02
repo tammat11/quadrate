@@ -28,6 +28,14 @@
       "destination": "/api/index?__pathname=/api/cabinet/:path*"
     },
     {
+      "source": "/api/bitrix-app-config",
+      "destination": "/api/index?__pathname=/api/bitrix-app-config"
+    },
+    {
+      "source": "/api/bitrix-app/:path*",
+      "destination": "/api/index?__pathname=/api/bitrix-app/:path*"
+    },
+    {
       "source": "/api/bitrix/:path*",
       "destination": "/api/index?__pathname=/api/bitrix/:path*"
     },
