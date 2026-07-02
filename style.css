@@ -2656,3 +2656,253 @@ th.matrix-col-summary {
         align-items: flex-start;
     }
 }
+
+/* ——— Форма внесения управленки ——— */
+.mgmt-form-section {
+    margin-top: 20px;
+    border-top: 1px solid var(--color-border, rgba(255,255,255,.1));
+    padding-top: 20px;
+}
+
+.mgmt-form-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.mgmt-form-title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    opacity: .6;
+}
+
+.mgmt-add-btn {
+    background: var(--color-accent, #2563eb);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s;
+}
+.mgmt-add-btn:hover { opacity: .85; }
+
+.mgmt-form-wrap {
+    background: var(--color-surface-raised, rgba(255,255,255,.04));
+    border: 1px solid var(--color-border, rgba(255,255,255,.1));
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+}
+
+.mgmt-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.mgmt-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.mgmt-form-group-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    opacity: .5;
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--color-border, rgba(255,255,255,.08));
+}
+
+.mgmt-form-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: flex-end;
+}
+
+.mgmt-label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    opacity: .7;
+    font-weight: 500;
+    min-width: 120px;
+}
+
+.mgmt-req { color: #ef4444; }
+
+.mgmt-input {
+    background: var(--color-input-bg, rgba(255,255,255,.06));
+    border: 1px solid var(--color-border, rgba(255,255,255,.12));
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 13px;
+    color: inherit;
+    width: 100%;
+    transition: border-color .15s;
+    outline: none;
+    font-family: inherit;
+}
+.mgmt-input:focus { border-color: var(--color-accent, #2563eb); }
+.mgmt-input[type="number"] { width: 130px; -moz-appearance: textfield; }
+.mgmt-input[type="number"]::-webkit-outer-spin-button,
+.mgmt-input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+.mgmt-input[type="month"] { width: 155px; }
+.mgmt-textarea { resize: vertical; width: 100%; max-width: 500px; }
+
+.mgmt-computed-box {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--color-surface, rgba(255,255,255,.03));
+    border: 1px solid var(--color-border, rgba(255,255,255,.1));
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 12px;
+    min-width: 120px;
+    align-self: flex-end;
+}
+.mgmt-computed-box span { opacity: .55; font-size: 11px; }
+.mgmt-computed-box strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+
+.mgmt-form-result {
+    display: flex;
+    gap: 16px;
+    background: var(--color-surface, rgba(255,255,255,.04));
+    border: 1px solid var(--color-border, rgba(255,255,255,.1));
+    border-radius: 8px;
+    padding: 12px 16px;
+    flex-wrap: wrap;
+}
+.mgmt-form-result.is-negative { border-color: rgba(239,68,68,.4); }
+.mgmt-result-item { display: flex; flex-direction: column; gap: 2px; }
+.mgmt-result-item span { font-size: 11px; opacity: .55; }
+.mgmt-result-item strong { font-size: 16px; font-variant-numeric: tabular-nums; }
+.mgmt-result-highlight strong { font-size: 20px; }
+.mgmt-result-highlight strong.is-good { color: #22c55e; }
+.mgmt-result-highlight strong.is-warn { color: #f59e0b; }
+.mgmt-result-highlight strong.is-bad { color: #ef4444; }
+
+.mgmt-form-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.mgmt-btn {
+    border: none;
+    border-radius: 8px;
+    padding: 9px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s;
+}
+.mgmt-btn:disabled { opacity: .5; cursor: not-allowed; }
+.mgmt-btn-cancel { background: var(--color-surface-raised, rgba(255,255,255,.08)); color: inherit; }
+.mgmt-btn-save { background: var(--color-accent, #2563eb); color: #fff; }
+.mgmt-btn:hover:not(:disabled) { opacity: .85; }
+
+.mgmt-form-error {
+    background: rgba(239,68,68,.12);
+    border: 1px solid rgba(239,68,68,.3);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: #ef4444;
+}
+
+/* ——— Список внесённых записей ——— */
+.mgmt-entries-wrap { display: flex; flex-direction: column; gap: 2px; }
+.mgmt-entries-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    opacity: .45;
+    margin-bottom: 6px;
+    margin-top: 4px;
+}
+
+.mgmt-entry-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--color-surface-raised, rgba(255,255,255,.03));
+    border: 1px solid var(--color-border, rgba(255,255,255,.07));
+    border-radius: 8px;
+    padding: 10px 14px;
+    transition: border-color .15s;
+    flex-wrap: wrap;
+}
+.mgmt-entry-row:hover { border-color: rgba(255,255,255,.18); }
+
+.mgmt-entry-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 180px;
+    flex: 1;
+}
+.mgmt-entry-address { font-size: 13px; font-weight: 600; }
+.mgmt-entry-month { font-size: 11px; opacity: .5; }
+.mgmt-entry-ip { font-size: 11px; opacity: .45; }
+
+.mgmt-entry-nums {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.mgmt-entry-num {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    min-width: 70px;
+}
+.mgmt-entry-num em { font-style: normal; font-size: 10px; opacity: .45; }
+.mgmt-entry-num.is-margin strong,
+.mgmt-entry-num.is-pct strong { color: var(--color-accent, #2563eb); }
+
+.mgmt-entry-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.mgmt-entry-edit, .mgmt-entry-delete {
+    background: transparent;
+    border: 1px solid var(--color-border, rgba(255,255,255,.1));
+    border-radius: 6px;
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+    font-size: 13px;
+    color: inherit;
+    opacity: .5;
+    transition: opacity .15s, border-color .15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.mgmt-entry-edit:hover { opacity: 1; border-color: var(--color-accent, #2563eb); color: var(--color-accent, #2563eb); }
+.mgmt-entry-delete:hover { opacity: 1; border-color: #ef4444; color: #ef4444; }
+
+@media (max-width: 600px) {
+    .mgmt-input[type="number"] { width: 100%; }
+    .mgmt-input[type="month"] { width: 100%; }
+    .mgmt-form-row { flex-direction: column; }
+    .mgmt-label { min-width: 0; width: 100%; }
+    .mgmt-computed-box { width: 100%; }
+}

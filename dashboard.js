@@ -1845,6 +1845,8 @@ function buildManagementPartnerLookup() {
 }
 
 function getManagementPartnerId(item) {
+    const pgDirect = normalizePartnerRef(getFieldValue(item, '_partner_bitrix_id'));
+    if (pgDirect) return pgDirect;
     const direct = normalizePartnerRef(getFieldValue(item, FIELDS.OPU_PARTNER));
     if (direct) return direct;
 

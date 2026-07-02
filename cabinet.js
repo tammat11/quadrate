@@ -26,6 +26,8 @@ let activeCabinetTab = 'details';
 let activeBreakdownFocus = 'calls';
 let activeCabinetRow = null;
 let selectedCabinetPartnerId = '';
+let cabinetManagementEntries = [];
+let managementFormEditId = null;
 
 const CABINET_PARTNER_SELECTOR_PHONES = new Set(['77070522006']);
 
@@ -989,8 +991,9 @@ function renderManagementPane(row) {
         return `
             <div class="cabinet-placeholder">
                 <h3>Управленка</h3>
-                <p>По этому партнёру за выбранный месяц данных из Marja_full нет.</p>
+                <p>За выбранный месяц данных нет — внесите их ниже.</p>
             </div>
+            ${renderCabinetManagementFormSection()}
         `;
     }
 
@@ -1043,7 +1046,391 @@ function renderManagementPane(row) {
             </div>
             ${renderManagementRows(rows)}
         </section>
+        ${renderCabinetManagementFormSection()}
     `;
+}
+
+function getSelectedCabinetMonth() {
+    const select = document.getElementById('monthSelect');
+    return select ? select.value : '';
+}
+
+function mgmtFmt(val) {
+    const n = Number(val);
+    if (!n) return '—';
+    return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(n);
+}
+
+function renderCabinetManagementFormSection() {
+    return `
+        <section class="mgmt-form-section" data-mgmt-form-section>
+            <div class="mgmt-form-header">
+                <span class="mgmt-form-title">Мои данные</span>
+                <button type="button" class="mgmt-add-btn" data-mgmt-add>+ Добавить объект</button>
+            </div>
+            <div class="mgmt-form-wrap" data-mgmt-form-wrap hidden>
+                ${renderManagementEntryForm()}
+            </div>
+            <div class="mgmt-entries-list" data-mgmt-entries-list>
+                ${renderMyManagementEntries(cabinetManagementEntries)}
+            </div>
+        </section>
+    `;
+}
+
+function renderManagementEntryForm(entry = null) {
+    const v = (key) => entry ? String(Number(entry[key]) || '') : '';
+    const s = (key) => entry ? DashboardApp.escapeHtml(entry[key] || '') : '';
+    return `
+        <form class="mgmt-form" data-mgmt-form autocomplete="off">
+            <input type="hidden" name="id" value="${entry ? entry.id : ''}">
+            <div class="mgmt-form-group">
+                <div class="mgmt-form-row">
+                    <label class="mgmt-label">Месяц <span class="mgmt-req">*</span>
+                        <input class="mgmt-input" type="month" name="month_key" required value="${entry ? s('month_key') : getSelectedCabinetMonth()}">
+                    </label>
+                    <label class="mgmt-label">Адрес объекта
+                        <input class="mgmt-input" type="text" name="address" value="${s('address')}" placeholder="ул. Пушкина, д. 10">
+                    </label>
+                    <label class="mgmt-label">Наименование ИП
+                        <input class="mgmt-input" type="text" name="ip_name" value="${s('ip_name')}" placeholder="ИП Иванов">
+                    </label>
+                    <label class="mgmt-label">Компания
+                        <input class="mgmt-input" type="text" name="company_name" value="${s('company_name')}" placeholder="ТОО Рога и Копыта">
+                    </label>
+                </div>
+            </div>
+
+            <div class="mgmt-form-group">
+                <div class="mgmt-form-group-title">Реализация</div>
+                <div class="mgmt-form-row">
+                    <label class="mgmt-label">Реализация с НДС
+                        <input class="mgmt-input mgmt-num" type="number" name="revenue_gross" value="${v('revenue_gross')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">НДС
+                        <input class="mgmt-input mgmt-num" type="number" name="vat" value="${v('vat')}" placeholder="0">
+                    </label>
+                    <div class="mgmt-computed-box">
+                        <span>Реализация без НДС</span>
+                        <strong data-mgmt-rev-net>—</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mgmt-form-group">
+                <div class="mgmt-form-group-title">ФОТ</div>
+                <div class="mgmt-form-row">
+                    <label class="mgmt-label">ФОТ офф. (Битрикс)
+                        <input class="mgmt-input mgmt-num" type="number" name="fot_official" value="${v('fot_official')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">ФОТ неофф.
+                        <input class="mgmt-input mgmt-num" type="number" name="fot_unofficial" value="${v('fot_unofficial')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Каспи / JTI
+                        <input class="mgmt-input mgmt-num" type="number" name="kaspi_jti" value="${v('kaspi_jti')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Кураторы
+                        <input class="mgmt-input mgmt-num" type="number" name="curators" value="${v('curators')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Сдельщики
+                        <input class="mgmt-input mgmt-num" type="number" name="pieceworkers" value="${v('pieceworkers')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Самозанятые
+                        <input class="mgmt-input mgmt-num" type="number" name="self_employed" value="${v('self_employed')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Налоги по з/п
+                        <input class="mgmt-input mgmt-num" type="number" name="payroll_taxes" value="${v('payroll_taxes')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">ОФ ЗП 1С
+                        <input class="mgmt-input mgmt-num" type="number" name="official_salary" value="${v('official_salary')}" placeholder="0">
+                    </label>
+                    <div class="mgmt-computed-box">
+                        <span>ИТОГО ФОТ</span>
+                        <strong data-mgmt-fot-total>—</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mgmt-form-group">
+                <div class="mgmt-form-group-title">УМС</div>
+                <div class="mgmt-form-row">
+                    <label class="mgmt-label">УМС
+                        <input class="mgmt-input mgmt-num" type="number" name="ums" value="${v('ums')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">УМС ELS
+                        <input class="mgmt-input mgmt-num" type="number" name="ums_els" value="${v('ums_els')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Eco Line УМС
+                        <input class="mgmt-input mgmt-num" type="number" name="eco_line_ums" value="${v('eco_line_ums')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Ген. уборка
+                        <input class="mgmt-input mgmt-num" type="number" name="gen_cleaning" value="${v('gen_cleaning')}" placeholder="0">
+                    </label>
+                    <div class="mgmt-computed-box">
+                        <span>ИТОГО УМС</span>
+                        <strong data-mgmt-ums-total>—</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mgmt-form-group">
+                <div class="mgmt-form-group-title">Прочие расходы</div>
+                <div class="mgmt-form-row">
+                    <label class="mgmt-label">Авансирования
+                        <input class="mgmt-input mgmt-num" type="number" name="advances" value="${v('advances')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Транспортные расходы
+                        <input class="mgmt-input mgmt-num" type="number" name="transport" value="${v('transport')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Аренда спецтехники
+                        <input class="mgmt-input mgmt-num" type="number" name="equipment_rent" value="${v('equipment_rent')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Сумма товара
+                        <input class="mgmt-input mgmt-num" type="number" name="goods" value="${v('goods')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Ремонт
+                        <input class="mgmt-input mgmt-num" type="number" name="repairs" value="${v('repairs')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Консалтинг
+                        <input class="mgmt-input mgmt-num" type="number" name="consulting" value="${v('consulting')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Оборудование
+                        <input class="mgmt-input mgmt-num" type="number" name="equipment" value="${v('equipment')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Бух. услуги
+                        <input class="mgmt-input mgmt-num" type="number" name="buh_services" value="${v('buh_services')}" placeholder="0">
+                    </label>
+                </div>
+            </div>
+
+            <div class="mgmt-form-group">
+                <div class="mgmt-form-group-title">Налоги</div>
+                <div class="mgmt-form-row">
+                    <label class="mgmt-label">ИПН / КПН
+                        <input class="mgmt-input mgmt-num" type="number" name="ipn_kpn" value="${v('ipn_kpn')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Налоги самозанятых
+                        <input class="mgmt-input mgmt-num" type="number" name="self_employed_taxes" value="${v('self_employed_taxes')}" placeholder="0">
+                    </label>
+                    <label class="mgmt-label">Расходы ИП
+                        <input class="mgmt-input mgmt-num" type="number" name="ip_expenses" value="${v('ip_expenses')}" placeholder="0">
+                    </label>
+                </div>
+            </div>
+
+            <div class="mgmt-form-group">
+                <label class="mgmt-label">Примечание
+                    <textarea class="mgmt-input mgmt-textarea" name="note" rows="2" placeholder="Дополнительная информация...">${s('note')}</textarea>
+                </label>
+            </div>
+
+            <div class="mgmt-form-result">
+                <div class="mgmt-result-item">
+                    <span>Маржа партнёра</span>
+                    <strong data-mgmt-partner-margin>—</strong>
+                </div>
+                <div class="mgmt-result-item mgmt-result-highlight">
+                    <span>Маржа %</span>
+                    <strong data-mgmt-margin-pct>—</strong>
+                </div>
+            </div>
+
+            <div class="mgmt-form-actions">
+                <button type="button" class="mgmt-btn mgmt-btn-cancel" data-mgmt-cancel>${entry ? 'Отмена' : 'Отмена'}</button>
+                <button type="submit" class="mgmt-btn mgmt-btn-save" data-mgmt-submit>
+                    ${entry ? 'Сохранить изменения' : 'Добавить объект'}
+                </button>
+            </div>
+            <div class="mgmt-form-error" data-mgmt-error hidden></div>
+        </form>
+    `;
+}
+
+function renderMyManagementEntries(entries) {
+    if (!entries || !entries.length) return '';
+    const rows = entries.map(e => {
+        const revNet = Number(e.revenue_gross) - Number(e.vat);
+        const fotTotal = Number(e.fot_official) + Number(e.fot_unofficial) + Number(e.kaspi_jti) + Number(e.curators) + Number(e.pieceworkers) + Number(e.self_employed) + Number(e.payroll_taxes) + Number(e.official_salary);
+        const umsTotal = Number(e.ums) + Number(e.ums_els) + Number(e.eco_line_ums) + Number(e.gen_cleaning);
+        const otherExpenses = Number(e.advances) + Number(e.transport) + Number(e.equipment_rent) + Number(e.goods) + Number(e.repairs) + Number(e.consulting) + Number(e.equipment) + Number(e.buh_services);
+        const taxes = Number(e.ipn_kpn) + Number(e.self_employed_taxes) + Number(e.ip_expenses);
+        const partnerMargin = revNet - fotTotal - umsTotal - otherExpenses - taxes;
+        const marginPct = revNet !== 0 ? (partnerMargin / revNet * 100).toFixed(1) + '%' : '—';
+        const monthLabel = e.month_key ? DashboardApp.formatMonthLabel(e.month_key) : '—';
+        return `
+            <div class="mgmt-entry-row" data-mgmt-entry-id="${e.id}">
+                <div class="mgmt-entry-main">
+                    <span class="mgmt-entry-address">${DashboardApp.escapeHtml(e.address || '—')}</span>
+                    <span class="mgmt-entry-month">${DashboardApp.escapeHtml(monthLabel)}</span>
+                    <span class="mgmt-entry-ip">${DashboardApp.escapeHtml(e.ip_name || '')}</span>
+                </div>
+                <div class="mgmt-entry-nums">
+                    <span class="mgmt-entry-num"><em>Реализация</em>${DashboardApp.escapeHtml(mgmtFmt(revNet))}</span>
+                    <span class="mgmt-entry-num"><em>ФОТ</em>${DashboardApp.escapeHtml(mgmtFmt(fotTotal))}</span>
+                    <span class="mgmt-entry-num"><em>УМС</em>${DashboardApp.escapeHtml(mgmtFmt(umsTotal))}</span>
+                    <span class="mgmt-entry-num is-margin"><em>Маржа</em>${DashboardApp.escapeHtml(mgmtFmt(partnerMargin))}</span>
+                    <span class="mgmt-entry-num is-pct"><em>Маржа %</em>${DashboardApp.escapeHtml(marginPct)}</span>
+                </div>
+                <div class="mgmt-entry-actions">
+                    <button type="button" class="mgmt-entry-edit" data-mgmt-edit="${e.id}" aria-label="Редактировать">✎</button>
+                    <button type="button" class="mgmt-entry-delete" data-mgmt-delete="${e.id}" aria-label="Удалить">✕</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+    return `
+        <div class="mgmt-entries-wrap">
+            <div class="mgmt-entries-title">Внесённые данные</div>
+            ${rows}
+        </div>
+    `;
+}
+
+async function loadCabinetManagementEntries(month) {
+    try {
+        const params = month ? `?month=${encodeURIComponent(month)}` : '';
+        const data = await fetchJson(`/api/cabinet/management-entries${params}`);
+        cabinetManagementEntries = Array.isArray(data.entries) ? data.entries : [];
+    } catch {
+        cabinetManagementEntries = [];
+    }
+    const listEl = managementPane?.querySelector('[data-mgmt-entries-list]');
+    if (listEl) listEl.innerHTML = renderMyManagementEntries(cabinetManagementEntries);
+}
+
+function calcManagementFormTotals(form) {
+    const n = (name) => Number(form.querySelector(`[name="${name}"]`)?.value) || 0;
+    const revGross = n('revenue_gross');
+    const vat = n('vat');
+    const revNet = revGross - vat;
+    const fotTotal = n('fot_official') + n('fot_unofficial') + n('kaspi_jti') + n('curators') + n('pieceworkers') + n('self_employed') + n('payroll_taxes') + n('official_salary');
+    const umsTotal = n('ums') + n('ums_els') + n('eco_line_ums') + n('gen_cleaning');
+    const otherExpenses = n('advances') + n('transport') + n('equipment_rent') + n('goods') + n('repairs') + n('consulting') + n('equipment') + n('buh_services');
+    const taxes = n('ipn_kpn') + n('self_employed_taxes') + n('ip_expenses');
+    const partnerMargin = revNet - fotTotal - umsTotal - otherExpenses - taxes;
+    const marginPct = revNet !== 0 ? (partnerMargin / revNet * 100) : null;
+    const fmt = (val) => val === 0 ? '0' : new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(val);
+    const setText = (sel, text) => { const el = form.querySelector(sel); if (el) el.textContent = text; };
+    setText('[data-mgmt-rev-net]', fmt(revNet));
+    setText('[data-mgmt-fot-total]', fmt(fotTotal));
+    setText('[data-mgmt-ums-total]', fmt(umsTotal));
+    setText('[data-mgmt-partner-margin]', fmt(partnerMargin));
+    setText('[data-mgmt-margin-pct]', marginPct !== null ? marginPct.toFixed(1) + '%' : '—');
+    const resultEl = form.querySelector('.mgmt-form-result');
+    if (resultEl) {
+        resultEl.classList.toggle('is-negative', partnerMargin < 0);
+        const pctEl = form.querySelector('[data-mgmt-margin-pct]');
+        if (pctEl && marginPct !== null) {
+            pctEl.classList.toggle('is-good', marginPct >= 0 && marginPct < 12);
+            pctEl.classList.toggle('is-warn', marginPct >= 12 && marginPct < 30);
+            pctEl.classList.toggle('is-bad', marginPct >= 30);
+        }
+    }
+}
+
+function initManagementFormHandlers() {
+    if (!managementPane) return;
+    managementPane.addEventListener('click', async (e) => {
+        const addBtn = e.target.closest('[data-mgmt-add]');
+        if (addBtn) {
+            managementFormEditId = null;
+            const wrap = managementPane.querySelector('[data-mgmt-form-wrap]');
+            if (!wrap) return;
+            if (!wrap.hidden) { wrap.hidden = true; return; }
+            wrap.innerHTML = renderManagementEntryForm();
+            wrap.hidden = false;
+            wrap.querySelector('[name="address"]')?.focus();
+            attachFormListeners(wrap);
+            return;
+        }
+        const cancelBtn = e.target.closest('[data-mgmt-cancel]');
+        if (cancelBtn) {
+            const wrap = managementPane.querySelector('[data-mgmt-form-wrap]');
+            if (wrap) { wrap.hidden = true; wrap.innerHTML = renderManagementEntryForm(); }
+            managementFormEditId = null;
+            return;
+        }
+        const editBtn = e.target.closest('[data-mgmt-edit]');
+        if (editBtn) {
+            const id = Number(editBtn.dataset.mgmtEdit);
+            const entry = cabinetManagementEntries.find(e => e.id === id || Number(e.id) === id);
+            if (!entry) return;
+            managementFormEditId = id;
+            const wrap = managementPane.querySelector('[data-mgmt-form-wrap]');
+            if (!wrap) return;
+            wrap.innerHTML = renderManagementEntryForm(entry);
+            wrap.hidden = false;
+            wrap.querySelector('[name="address"]')?.focus();
+            attachFormListeners(wrap);
+            wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            return;
+        }
+        const deleteBtn = e.target.closest('[data-mgmt-delete]');
+        if (deleteBtn) {
+            const id = Number(deleteBtn.dataset.mgmtDelete);
+            if (!confirm('Удалить эту запись?')) return;
+            deleteBtn.disabled = true;
+            try {
+                await fetchJson(`/api/cabinet/management-entries/${id}`, { method: 'DELETE' });
+                cabinetManagementEntries = cabinetManagementEntries.filter(e => Number(e.id) !== id);
+                const listEl = managementPane.querySelector('[data-mgmt-entries-list]');
+                if (listEl) listEl.innerHTML = renderMyManagementEntries(cabinetManagementEntries);
+            } catch (err) {
+                alert(err.message || 'Ошибка при удалении');
+                deleteBtn.disabled = false;
+            }
+            return;
+        }
+    });
+}
+
+function attachFormListeners(wrap) {
+    const form = wrap.querySelector('[data-mgmt-form]');
+    if (!form) return;
+    form.querySelectorAll('.mgmt-num').forEach(input => {
+        input.addEventListener('input', () => calcManagementFormTotals(form));
+    });
+    calcManagementFormTotals(form);
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const submitBtn = form.querySelector('[data-mgmt-submit]');
+        const errorEl = form.querySelector('[data-mgmt-error]');
+        submitBtn.disabled = true;
+        if (errorEl) errorEl.hidden = true;
+        try {
+            const data = Object.fromEntries(new FormData(form).entries());
+            if (managementFormEditId) data.id = managementFormEditId;
+            const result = await fetchJson('/api/cabinet/management-entries', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const saved = result.entry;
+            if (managementFormEditId) {
+                cabinetManagementEntries = cabinetManagementEntries.map(e => Number(e.id) === managementFormEditId ? saved : e);
+            } else {
+                cabinetManagementEntries = [saved, ...cabinetManagementEntries];
+            }
+            managementFormEditId = null;
+            wrap.hidden = true;
+            wrap.innerHTML = renderManagementEntryForm();
+            const listEl = managementPane.querySelector('[data-mgmt-entries-list]');
+            if (listEl) listEl.innerHTML = renderMyManagementEntries(cabinetManagementEntries);
+        } catch (err) {
+            if (errorEl) { errorEl.textContent = err.message || 'Ошибка при сохранении'; errorEl.hidden = false; }
+        } finally {
+            submitBtn.disabled = false;
+        }
+    });
+}
+
+function fetchJson(url, options = {}) {
+    return fetch(url, { cache: 'no-store', ...options }).then(async r => {
+        const text = await r.text();
+        const json = JSON.parse(text || '{}');
+        if (!r.ok) throw new Error(json.error || `HTTP ${r.status}`);
+        return json;
+    });
 }
 
 function renderCabinetRows(rows) {
@@ -1078,7 +1465,11 @@ function renderCabinetRows(rows) {
         .map(([label, key]) => detailCard(label, formatMetric(row, key), row.details?.[key], row, key))
         .join('');
     renderExplainedDetails(row);
-    if (managementPane) managementPane.innerHTML = renderManagementPane(row);
+    if (managementPane) {
+        managementPane.innerHTML = renderManagementPane(row);
+        initManagementFormHandlers();
+        loadCabinetManagementEntries(getSelectedCabinetMonth());
+    }
     syncManagementScrollbars();
 }
 

@@ -410,6 +410,48 @@ async function ensureCabinetDbSchema() {
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
             `);
+            await client.query(`
+                CREATE TABLE IF NOT EXISTS management_entries (
+                    id BIGSERIAL PRIMARY KEY,
+                    partner_bitrix_id TEXT NOT NULL,
+                    month_key TEXT NOT NULL,
+                    address TEXT NOT NULL DEFAULT '',
+                    ip_name TEXT NOT NULL DEFAULT '',
+                    company_name TEXT NOT NULL DEFAULT '',
+                    revenue_gross NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    vat NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    fot_official NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    fot_unofficial NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    kaspi_jti NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    curators NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    pieceworkers NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    self_employed NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    ums NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    ums_els NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    eco_line_ums NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    gen_cleaning NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    advances NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    transport NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    equipment_rent NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    goods NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    repairs NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    consulting NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    equipment NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    payroll_taxes NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    official_salary NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    self_employed_taxes NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    ipn_kpn NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    buh_services NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    ip_expenses NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    note TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+            `);
+            await client.query(`
+                CREATE INDEX IF NOT EXISTS management_entries_partner_month_idx
+                ON management_entries (partner_bitrix_id, month_key);
+            `);
         })
             .then(() => {
                 cabinetDbState.schemaReady = true;
@@ -1251,7 +1293,144 @@ async function handleCabinetAuth(req, res, pathname) {
         return;
     }
 
+    if (pathname === '/api/cabinet/management-entries' || pathname.startsWith('/api/cabinet/management-entries/')) {
+        await handleCabinetManagementEntries(req, res, pathname);
+        return;
+    }
+
     sendJson(res, 404, { error: 'Cabinet endpoint not found' });
+}
+
+async function handleCabinetManagementEntries(req, res, pathname) {
+    const session = await getCabinetSession(req);
+    if (!session) {
+        sendJson(res, 401, { error: 'Unauthorized' });
+        return;
+    }
+    if (!hasCabinetDbConfig()) {
+        sendJson(res, 503, { error: 'Database not configured' });
+        return;
+    }
+    await ensureCabinetDbSchema();
+
+    const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+    const accounts = Array.isArray(session.accounts) ? session.accounts : [];
+    const account = accounts.find(a => a && a.partnerBitrixId);
+    const queryPartnerId = canChooseCabinetPartner(session.phone)
+        ? (requestUrl.searchParams.get('partner_id') || '')
+        : '';
+    const partnerBitrixId = queryPartnerId || (account?.partnerBitrixId || '');
+    if (!partnerBitrixId) {
+        sendJson(res, 400, { error: 'No partner account found' });
+        return;
+    }
+
+    if (req.method === 'GET') {
+        const month = String(requestUrl.searchParams.get('month') || '').trim();
+        let query = 'SELECT * FROM management_entries WHERE partner_bitrix_id = $1';
+        const params = [partnerBitrixId];
+        if (month && /^\d{4}-\d{2}$/.test(month)) {
+            query += ' AND month_key = $2';
+            params.push(month);
+        }
+        query += ' ORDER BY updated_at DESC';
+        const { rows } = await queryCabinetDb(query, params);
+        sendJson(res, 200, { entries: rows });
+        return;
+    }
+
+    if (req.method === 'POST') {
+        const raw = await readRequestBody(req);
+        const body = JSON.parse(raw || '{}');
+        const monthKey = String(body.month_key || '').trim();
+        if (!monthKey || !/^\d{4}-\d{2}$/.test(monthKey)) {
+            sendJson(res, 400, { error: 'Укажите корректный месяц (YYYY-MM)' });
+            return;
+        }
+        const nf = (key) => { const v = Number(body[key]); return Number.isFinite(v) ? v : 0; };
+        const fields = {
+            partner_bitrix_id: partnerBitrixId,
+            month_key: monthKey,
+            address: String(body.address || '').trim().slice(0, 500),
+            ip_name: String(body.ip_name || '').trim().slice(0, 300),
+            company_name: String(body.company_name || '').trim().slice(0, 300),
+            revenue_gross: nf('revenue_gross'),
+            vat: nf('vat'),
+            fot_official: nf('fot_official'),
+            fot_unofficial: nf('fot_unofficial'),
+            kaspi_jti: nf('kaspi_jti'),
+            curators: nf('curators'),
+            pieceworkers: nf('pieceworkers'),
+            self_employed: nf('self_employed'),
+            ums: nf('ums'),
+            ums_els: nf('ums_els'),
+            eco_line_ums: nf('eco_line_ums'),
+            gen_cleaning: nf('gen_cleaning'),
+            advances: nf('advances'),
+            transport: nf('transport'),
+            equipment_rent: nf('equipment_rent'),
+            goods: nf('goods'),
+            repairs: nf('repairs'),
+            consulting: nf('consulting'),
+            equipment: nf('equipment'),
+            payroll_taxes: nf('payroll_taxes'),
+            official_salary: nf('official_salary'),
+            self_employed_taxes: nf('self_employed_taxes'),
+            ipn_kpn: nf('ipn_kpn'),
+            buh_services: nf('buh_services'),
+            ip_expenses: nf('ip_expenses'),
+            note: String(body.note || '').trim().slice(0, 1000)
+        };
+        const entryId = body.id ? Number(body.id) : null;
+        if (entryId) {
+            const { rows: existing } = await queryCabinetDb(
+                'SELECT id FROM management_entries WHERE id = $1 AND partner_bitrix_id = $2',
+                [entryId, partnerBitrixId]
+            );
+            if (!existing.length) {
+                sendJson(res, 404, { error: 'Запись не найдена' });
+                return;
+            }
+            const updateKeys = Object.keys(fields).filter(k => k !== 'partner_bitrix_id');
+            const setClauses = updateKeys.map((k, i) => `${k} = $${i + 2}`).join(', ');
+            await queryCabinetDb(
+                `UPDATE management_entries SET ${setClauses}, updated_at = NOW() WHERE id = $1`,
+                [entryId, ...updateKeys.map(k => fields[k])]
+            );
+            const { rows } = await queryCabinetDb('SELECT * FROM management_entries WHERE id = $1', [entryId]);
+            sendJson(res, 200, { entry: rows[0] });
+        } else {
+            const keys = Object.keys(fields);
+            const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+            const { rows } = await queryCabinetDb(
+                `INSERT INTO management_entries (${keys.join(', ')}) VALUES (${placeholders}) RETURNING *`,
+                keys.map(k => fields[k])
+            );
+            sendJson(res, 201, { entry: rows[0] });
+        }
+        return;
+    }
+
+    if (req.method === 'DELETE') {
+        const parts = pathname.split('/');
+        const id = Number(parts[parts.length - 1]);
+        if (!id) {
+            sendJson(res, 400, { error: 'Missing entry id' });
+            return;
+        }
+        const { rows } = await queryCabinetDb(
+            'DELETE FROM management_entries WHERE id = $1 AND partner_bitrix_id = $2 RETURNING id',
+            [id, partnerBitrixId]
+        );
+        if (!rows.length) {
+            sendJson(res, 404, { error: 'Запись не найдена' });
+            return;
+        }
+        sendJson(res, 200, { deleted: id });
+        return;
+    }
+
+    sendJson(res, 405, { error: 'Method not allowed' });
 }
 
 function serveStatic(req, res) {
@@ -1770,6 +1949,87 @@ async function handleBootstrapSync(req, res) {
     }
 }
 
+function convertPgEntryToManagementRow(entry) {
+    const n = (key) => Number(entry[key]) || 0;
+    const revNet = n('revenue_gross') - n('vat');
+    const fotTotal = n('fot_official') + n('fot_unofficial') + n('kaspi_jti') + n('curators') + n('pieceworkers') + n('self_employed') + n('payroll_taxes') + n('official_salary');
+    const umsTotal = n('ums') + n('ums_els') + n('eco_line_ums') + n('gen_cleaning');
+    const otherExpenses = n('advances') + n('transport') + n('equipment_rent') + n('goods') + n('repairs') + n('consulting') + n('equipment') + n('buh_services');
+    const taxes = n('ipn_kpn') + n('self_employed_taxes') + n('ip_expenses');
+    const partnerMargin = revNet - fotTotal - umsTotal - otherExpenses - taxes;
+    const margin = revNet !== 0 ? partnerMargin / revNet : 0;
+    const monthDate = entry.month_key ? `${entry.month_key}-01` : null;
+    return {
+        external_id: `pg-${entry.id}`,
+        _partner_bitrix_id: String(entry.partner_bitrix_id || ''),
+        'Название': entry.address || '',
+        'Адрес_объекта_инфо': entry.address || '',
+        'Адрес_объекта_инфо_ID': '',
+        'Наименование_ИП_инфо': entry.ip_name || '',
+        'Ответственное_лицо_ИП_инфо': '',
+        'Наименовение_компании_1': entry.company_name || '',
+        'Номер_воронки': '',
+        'Наименовение_воронки': '',
+        'Наименование_стадии': '',
+        'BIN_партнера': '',
+        'ФИО_1': '',
+        'Кураторы': n('curators'),
+        'Сдельщики': n('pieceworkers'),
+        'Пользовательский': '',
+        'Месяц_начисления': monthDate,
+        '__month_key': entry.month_key || '',
+        'Реализация с НДС': n('revenue_gross'),
+        'НДС': n('vat'),
+        'Реализация без НДС': revNet,
+        'ФОТ ОФФ Битрикс': n('fot_official'),
+        'ФОТ НЕОФ': n('fot_unofficial'),
+        'Kaspi/ JTI': n('kaspi_jti'),
+        'Самозанятые': n('self_employed'),
+        'Налоги_по_зарплате': n('payroll_taxes'),
+        'ОФ ЗП 1С': n('official_salary'),
+        'ИТОГО ФОТ': fotTotal,
+        'УМС': n('ums'),
+        'УМС ELS': n('ums_els'),
+        'Eco Line УМС': n('eco_line_ums'),
+        'Ген. Уборка': n('gen_cleaning'),
+        'ИТОГО УМС': umsTotal,
+        'Авансирования': n('advances'),
+        'Транспортные расходы': n('transport'),
+        'Аренда спецтехники': n('equipment_rent'),
+        'Сумма_Товара': n('goods'),
+        'Ремонт': n('repairs'),
+        'Консалтинг': n('consulting'),
+        'Оборудование': n('equipment'),
+        'Сумма_на_снятие': 0,
+        'Бух. Услуги': n('buh_services'),
+        'ИПН/КПН': n('ipn_kpn'),
+        'Налоги самозанятых': n('self_employed_taxes'),
+        'Расходы ИП': n('ip_expenses'),
+        'Маржа Партнера': partnerMargin,
+        'Маржа': margin,
+        '_source': 'cabinet'
+    };
+}
+
+async function fetchPgManagementRows(monthKey = '') {
+    if (!hasCabinetDbConfig()) return [];
+    try {
+        await ensureCabinetDbSchema();
+        let query = 'SELECT * FROM management_entries';
+        const params = [];
+        if (monthKey && /^\d{4}-\d{2}$/.test(monthKey)) {
+            query += ' WHERE month_key = $1';
+            params.push(monthKey);
+        }
+        query += ' ORDER BY updated_at DESC';
+        const { rows } = await queryCabinetDb(query, params);
+        return rows.map(convertPgEntryToManagementRow);
+    } catch (err) {
+        console.warn('fetchPgManagementRows failed:', err.message || err);
+        return [];
+    }
+}
+
 async function handleManagementReport(req, res) {
     if (req.method !== 'GET') {
         sendJson(res, 405, { error: 'Method not allowed' });
@@ -1784,9 +2044,13 @@ async function handleManagementReport(req, res) {
             sendJson(res, 200, payload);
             return;
         }
-        const rows = await fetchManagementRows(month);
+        const [mysqlRows, pgRows] = await Promise.all([
+            fetchManagementRows(month).catch(() => []),
+            fetchPgManagementRows(month)
+        ]);
+        const rows = [...mysqlRows, ...pgRows];
         sendJson(res, 200, {
-            source: 'Marja_full',
+            source: 'Marja_full+cabinet',
             month: month || 'all',
             rows,
             counts: {
