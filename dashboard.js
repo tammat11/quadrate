@@ -704,7 +704,7 @@ function isPositiveRemarkSource(value) {
     const rawString = String(raw).trim();
     const normalized = rawString.toLowerCase();
     return POSITIVE_REMARK_SOURCE_IDS.has(rawString)
-        || POSITIVE_REMARK_SOURCE_LABEL_PARTS.some(part => normalized.includes(part));
+        || POSITIVE_REMARK_LABEL_PARTS.some(part => normalized.includes(part));
 }
 
 function isNegativeRemarkSource(value) {
@@ -1259,7 +1259,7 @@ function getFotDbMonthsForSelection(selectedMonth = getSelectedMonth()) {
 function getManagementMonthForSelection(selectedMonth = getSelectedMonth()) {
     if (selectedMonth === 'all') return 'all';
     if (isSummaryFilter(selectedMonth)) return selectedMonth;
-    return shiftMonthKey(selectedMonth, -1) || selectedMonth;
+    return selectedMonth;
 }
 
 function buildFotDbIndexes() {
