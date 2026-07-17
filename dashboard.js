@@ -158,7 +158,7 @@ const AUDIT_REMARK_SOURCE_LABELS = new Set(['от аудитора замеча�
 const NEGATIVE_REMARK_SOURCE_IDS = new Set(['43609', '43607', '43735', '43709', '151243']);
 const NEGATIVE_REMARK_LABEL_PARTS = ['замечание'];
 const POSITIVE_REMARK_SOURCE_IDS = new Set(['43713', '43711', '43715']);
-const POSITIVE_REMARK_SOURCE_LABEL_PARTS = ['положительный отзыв'];
+const POSITIVE_REMARK_LABEL_PARTS = ['положительный отзыв'];
 const AUDIT_NEGATIVE_DEAL_PENALTY = 0;
 
 const MATRIX = {
@@ -599,11 +599,6 @@ function extractTrainingMonthKey(item) {
             .map(raw => raw ? new Date(raw) : null)
             .find(date => date && !Number.isNaN(date.getTime()));
 
-        if (referenceDate) {
-            let year = referenceDate.getFullYear();
-            const referenceMonth = referenceDate.getMonth() + 1;
-
-            // Если запись создана/обновлена на стыке года, подгоняем год под номер месяца.
             if (monthNumber - referenceMonth >= 6) {
                 year -= 1;
             } else if (referenceMonth - monthNumber >= 6) {
@@ -1259,7 +1254,7 @@ function getFotDbMonthsForSelection(selectedMonth = getSelectedMonth()) {
 function getManagementMonthForSelection(selectedMonth = getSelectedMonth()) {
     if (selectedMonth === 'all') return 'all';
     if (isSummaryFilter(selectedMonth)) return selectedMonth;
-    return selectedMonth;
+    return shiftMonthKey(selectedMonth, -1) || selectedMonth;
 }
 
 function buildFotDbIndexes() {
