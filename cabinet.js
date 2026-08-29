@@ -602,7 +602,7 @@ function renderCallsDetails(items = []) {
 function renderSummaryHero(row, breakdown) {
     const finalScore = DashboardApp.formatMetricNumber(breakdown.summary?.finalScore || row.matrixTotalScore || 0, 1);
     const rawTotal = DashboardApp.formatMetricNumber(breakdown.summary?.rawTotal || row.rawTotal || 0, 1);
-    const coeff = DashboardApp.formatMetricNumber(breakdown.summary?.complexityCoeff || row.complexityCoeff || 1, 2);
+    const coeff = DashboardApp.formatMetricNumber(breakdown.summary?.leagueCoeff || row.leagueCoeff || 1, 2);
     const overdueCount = breakdown.remarks?.overdueCount || 0;
 
     const remarkTone = overdueCount
@@ -618,16 +618,16 @@ function renderSummaryHero(row, breakdown) {
             </div>
             <div class="cabinet-summary-pills">
                 <div class="cabinet-summary-pill">
-                    <span>До коэффициента</span>
+                    <span>Сумма баллов</span>
                     <strong>${DashboardApp.escapeHtml(rawTotal)}</strong>
                 </div>
                 <div class="cabinet-summary-pill">
-                    <span>Коэффициент сложности</span>
+                    <span>Коэффициент лиги</span>
                     <strong>${DashboardApp.escapeHtml(coeff)}</strong>
                 </div>
                 <div class="cabinet-summary-pill">
-                    <span>Уровень</span>
-                    <strong>${DashboardApp.escapeHtml(row.partnerLevel || '—')}</strong>
+                    <span>Лига</span>
+                    <strong>${DashboardApp.escapeHtml(breakdown.summary?.league || row.league || '—')}</strong>
                 </div>
             </div>
         </section>
@@ -690,8 +690,8 @@ function renderCabinetOverview(row) {
             </div>
             <div class="cabinet-overview-aside">
                 <div class="cabinet-overview-chip">
-                    <span>Уровень</span>
-                    <strong>${DashboardApp.escapeHtml(row.partnerLevel || '—')}</strong>
+                    <span>Лига</span>
+                    <strong>${DashboardApp.escapeHtml(row.league || '—')}</strong>
                 </div>
                 <div class="cabinet-overview-chip">
                     <span>Просрочки</span>

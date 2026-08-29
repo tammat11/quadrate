@@ -425,17 +425,17 @@ test('getRemarksQ считает накопительный штраф как 1 
     assert.ok(Math.abs(dashboard.getRemarksQ('p1') - 0.05) < 1e-12);
 });
 
-test('getRemarksQ смягчает штраф, если замечаний у партнера очень много', () => {
+test('getRemarksQ нормирует штраф на реальный портфель партнера (замена смягчения по объему)', () => {
     dashboard.applyTestState({
         partnerMap: {
             p1: 'Партнер 1',
-            p2: 'Партнер 2',
-            p3: 'Партнер 3'
+            p2: 'Партнер 2'
         },
+        // У p1 портфель 10 объектов, у p2 — 1 объект. Абсолютный штраф одинаковый (10 замечаний
+        // × 0.05 = 0.5), но на объект он делится по-разному — большой портфель прощает больше.
         deals69: [
-            { UF_CRM_1743669674: 'p1' },
-            { UF_CRM_1743669674: 'p2' },
-            { UF_CRM_1743669674: 'p3' }
+            ...Array.from({ length: 10 }, () => ({ UF_CRM_1743669674: 'p1' })),
+            { UF_CRM_1743669674: 'p2' }
         ],
         remarkDeals: [
             ...Array.from({ length: 10 }, () => ({
@@ -445,19 +445,64 @@ test('getRemarksQ смягчает штраф, если замечаний у п
                 UF_CRM_FITBACK: '2026-03-04',
                 UF_CRM_1719824872888: '43607'
             })),
-            ...Array.from({ length: 5 }, () => ({
+            ...Array.from({ length: 10 }, () => ({
                 UF_CRM_1743669674: 'p2',
                 DATE_CREATE: '2026-03-10',
                 UF_CRM_REVIEWDATE: '2026-03-01',
                 UF_CRM_FITBACK: '2026-03-04',
                 UF_CRM_1719824872888: '43607'
-            })),
+            }))
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+
+    // p1: штраф 0.5 / портфель 10 = 0.05 на объект → Q = 0.95
+    assert.equal(dashboard.getRemarksQ('p1'), 0.95);
+    // p2: тот же абсолютный штраф 0.5 / портфель 1 = 0.5 на объект → Q = 0.5
+    assert.equal(dashboard.getRemarksQ('p2'), 0.5);
+    assert.ok(dashboard.getRemarksQ('p1') > dashboard.getRemarksQ('p2'));
+});
+
+test('getRemarkSeverityWeight суммирует веса по разметке заказчика (крит=4/выс=3/средн=2/низк=1/план=0)', () => {
+    assert.equal(dashboard.getRemarkSeverityWeight('43449'), 4); // Отсутствие ОПУ на объекте — Критический
+    assert.equal(dashboard.getRemarkSeverityWeight('43437'), 3); // Качество уборки — Высокий
+    assert.equal(dashboard.getRemarkSeverityWeight('43435'), 2); // УМС/РМ — Средний
+    assert.equal(dashboard.getRemarkSeverityWeight('43439'), 1); // Инвентарь/оборудование — Низкий
+    assert.equal(dashboard.getRemarkSeverityWeight('44867'), 0); // Несоответствие плановым работам — Плановый
+    // Несколько типов сразу — сумма весов (подтверждено заказчиком).
+    assert.equal(dashboard.getRemarkSeverityWeight(['43449', '43437']), 7); // 4 + 3
+    // Пустое поле — 0 (штрафуем только за просрочку, не выдумываем тяжесть).
+    assert.equal(dashboard.getRemarkSeverityWeight(null), 0);
+    assert.equal(dashboard.getRemarkSeverityWeight([]), 0);
+    // Неизвестный ID типа — считаем как "Прочее" (Средний, вес 2).
+    assert.equal(dashboard.getRemarkSeverityWeight('99999999'), 2);
+});
+
+test('getRemarksQ учитывает тяжесть замечания (Тип отзыва/замечания), а не только просрочку', () => {
+    dashboard.applyTestState({
+        partnerMap: { p1: 'Партнер 1', p2: 'Партнер 2' },
+        deals69: [
+            { UF_CRM_1743669674: 'p1' },
+            { UF_CRM_1743669674: 'p2' }
+        ],
+        remarkDeals: [
+            // p1: критическое замечание (вес 4), устранено день в день (0 просрочки).
             {
-                UF_CRM_1743669674: 'p3',
-                DATE_CREATE: '2026-03-10',
+                UF_CRM_1743669674: 'p1',
                 UF_CRM_REVIEWDATE: '2026-03-01',
-                UF_CRM_FITBACK: '2026-03-04',
-                UF_CRM_1719824872888: '43607'
+                UF_CRM_FITBACK: '2026-03-01',
+                UF_CRM_1719824872888: '43607',
+                UF_CRM_1716804677915: '43449'
+            },
+            // p2: плановое замечание (вес 0), тоже без просрочки — штрафа быть не должно.
+            {
+                UF_CRM_1743669674: 'p2',
+                UF_CRM_REVIEWDATE: '2026-03-01',
+                UF_CRM_FITBACK: '2026-03-01',
+                UF_CRM_1719824872888: '43607',
+                UF_CRM_1716804677915: '44867'
             }
         ]
     });
@@ -465,7 +510,10 @@ test('getRemarksQ смягчает штраф, если замечаний у п
     dashboard.buildIndexes();
     dashboard.processData();
 
-    assert.ok(dashboard.getRemarksQ('p1') > 0.5);
+    // p1: штраф = 0 (просрочка) + 4 × 0.05 = 0.2, портфель 1 → Q = 0.8
+    assert.equal(dashboard.getRemarksQ('p1'), 0.8);
+    // p2: штраф = 0 + 0 × 0.05 = 0, портфель 1 → Q = 1
+    assert.equal(dashboard.getRemarksQ('p2'), 1);
 });
 
 test('getRemarksQ не уходит в минус и зажимается в диапазон 0..1', () => {
@@ -556,7 +604,7 @@ test('замечание без FITBACK не штрафуется', () => {
     assert.equal(dashboard.getRemarksQ('p1'), 1);
 });
 
-test('getTrainingQ берет среднюю сумму и делит на 10', () => {
+test('getTrainingQ — заглушка Q=1.0 (новая методика считает % от общего штата, которого пока нет в данных)', () => {
     dashboard.applyTestState({
         opuItems: [
             { UF_CRM_127_1756273714: 'p1', UF_CRM_127_1756290422310: '03', CREATED_TIME: '2026-03-31T10:00:00+03:00', UF_CRM_KASJD12: '4' },
@@ -566,19 +614,8 @@ test('getTrainingQ берет среднюю сумму и делит на 10', 
 
     dashboard.buildIndexes();
 
-    assert.equal(dashboard.getTrainingQ('p1'), 0.45);
-});
-
-test('getTrainingQ читает живой bitrix-ключ ufCrm_KASJD12', () => {
-    dashboard.applyTestState({
-        opuItems: [
-            { ufCrm127_1756273714: 'p1', ufCrm127_1756290422310: '03', createdTime: '2026-03-31T10:00:00+03:00', ufCrm_KASJD12: 8.5 }
-        ]
-    });
-
-    dashboard.buildIndexes();
-
-    assert.equal(dashboard.getTrainingQ('p1'), 0.85);
+    assert.equal(dashboard.getTrainingQ('p1'), 1.0);
+    assert.equal(dashboard.getTrainingQ('p-без-данных'), 1.0);
 });
 
 test('getTrainingMetricDetail считает прошедших по количеству людей, а не по числу записей', () => {
@@ -614,7 +651,7 @@ test('getTrainingMetricDetail считает прошедших по колич�
     assert.equal(row.details.training.title.includes('Прошли обучение: 24'), true);
 });
 
-test('getTrainingQ без данных ставит дефолт 40%', () => {
+test('getTrainingQ без данных всё равно ставит заглушку 1.0', () => {
     dashboard.applyTestState({
         partnerMap: {
             p1: 'Партнер 1'
@@ -632,7 +669,7 @@ test('getTrainingQ без данных ставит дефолт 40%', () => {
     });
     dashboard.buildMatrixRows();
 
-    assert.equal(dashboard.getTrainingQ('p1'), 0.4);
+    assert.equal(dashboard.getTrainingQ('p1'), 1.0);
     const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
     assert.equal(row.details.training.sub, '0 прошли');
 });
@@ -720,7 +757,8 @@ test('getRealizationQ зажимает ФОТ на 100%, а в деталях п
 
     const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === '3421309');
     assert.ok(row);
-    assert.equal(row.q.realization, 1);
+    // «Реализация» больше не входит в q/итог — справочный показатель realizationQ.
+    assert.equal(row.realizationQ, 1);
     assert.equal(row.details.realization.displayValue, 1);
     assert.equal(row.details.realization.sub, '9.0м / 6.0м');
     assert.match(row.details.realization.title, /выполнение: 150%/);
@@ -787,7 +825,9 @@ test('фильтр месяца режет обзвон и обучение по
     dashboard.buildIndexes();
 
     assert.equal(dashboard.getCallsQ('p1'), 2 / 3);
-    assert.equal(dashboard.getTrainingQ('p1'), 0.5);
+    // getTrainingQ — заглушка Q=1.0 (см. план перехода на новую матрицу), сама фильтрация
+    // по месяцу для opuByPartner проверяется через getTrainingMetricDetail в других тестах.
+    assert.equal(dashboard.getTrainingQ('p1'), 1.0);
 });
 
 test('обзвон фильтруется только по полю даты обзвона', () => {
@@ -852,7 +892,7 @@ test('Общий свод берет только наступившие мес�
     dashboard.buildIndexes();
 
     assert.equal(dashboard.getCallsQ('p1'), 1);
-    assert.equal(dashboard.getTrainingQ('p1'), 0.4);
+    assert.equal(dashboard.getTrainingQ('p1'), 1.0); // заглушка новой методики
 });
 
 test('в марте обзвон захватывает еще и февраль', () => {
@@ -914,10 +954,12 @@ test('audit временно обнулен для всех', () => {
     dashboard.buildIndexes();
     dashboard.processData();
 
-    assert.equal(dashboard.getAuditQ('p1'), 0);
+    // Чек-лист аудита (45 критериев) будет отдельным приложением — пока источника нет,
+    // getAuditQ нейтрален (Q=1.0), а не штрафует (было 0 в старой методике).
+    assert.equal(dashboard.getAuditQ('p1'), 1.0);
 });
 
-test('audit не штрафует итог, пока временно обнулен', () => {
+test('audit — нейтральная заглушка, не штрафует и не premium-ит итог', () => {
     global.document = {
         getElementById(id) {
             if (id === 'monthSelect') return { value: '2026-03' };
@@ -950,8 +992,9 @@ test('audit не штрафует итог, пока временно обнул
 
     const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
     assert.ok(row);
-    assert.equal(row.auditPenaltyScore, 0);
-    assert.equal(row.matrixTotalScore, Math.round(row.preAuditTotalScore * 100) / 100);
+    assert.equal(row.q.audit, 1.0);
+    // Итог = сумма блоков + бонус за отзывы, без отдельного штрафа по аудиту.
+    assert.equal(row.matrixTotalScore, Math.round((row.rawTotal + row.positiveReviewBonus) * 100) / 100);
 });
 
 test('итог считается от отображаемых суммы и коэффициента, а не от скрытых дробей', () => {
@@ -993,12 +1036,10 @@ test('итог считается от отображаемых суммы и к
     const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
     assert.ok(row);
 
-    const shownRawTotal = Math.round(row.rawTotal * 10) / 10;
-    const shownCoeff = Math.round(row.complexityCoeff * 100) / 100;
-    const expectedTotal = Math.round((shownRawTotal * shownCoeff) * 100) / 100;
-
-    assert.equal(shownCoeff.toFixed(2), '1.00');
+    // Новая методика: лига/коэффициент больше НЕ умножает итог — только сумма блоков + бонус.
+    const expectedTotal = Math.round((row.rawTotal + row.positiveReviewBonus) * 100) / 100;
     assert.equal(row.matrixTotalScore, expectedTotal);
+    assert.ok(['Бриллиант', 'Изумруд', 'Золото'].includes(row.league));
 });
 
 test('extractTrainingMonthKey уважает номер месяца и корректно переживает переход года', () => {
@@ -1017,12 +1058,12 @@ test('extractTrainingMonthKey уважает номер месяца и корр
 
 test('матрица по умолчанию показывает только группы и раскрывает детали по кнопке', () => {
     let columns = dashboard.getVisibleMatrixColumns();
-    assert.deepEqual(columns.map(column => column.label), ['Партнер', 'Операционка', 'Деньги', 'Отношения', 'Сумма', 'Коэфф.', 'Итог']);
+    assert.deepEqual(columns.map(column => column.label), ['Партнер', 'Операционка', 'Финансы', 'Отношения', 'Сумма', 'Бонус', 'Лига', 'Итог']);
 
     dashboard.applyTestState({
         expandedMatrixGroups: {
             relations: true,
-            money: false,
+            finance: false,
             operations: true
         }
     });
@@ -1031,17 +1072,18 @@ test('матрица по умолчанию показывает только �
     assert.deepEqual(columns.map(column => column.label), [
         'Партнер',
         'Операционка',
-        'Клостер',
+        'Регистрация/отметка',
+        'Объезды',
         'Обучение',
-        'Дисциплины',
-        'УМС/РМ',
-        'Деньги',
+        'Финансы',
         'Отношения',
-        'Обзвон',
-        'Замечания',
+        'Обзвон (CSAT)',
         'Аудит',
+        'Замечания',
+        'Без замечаний',
         'Сумма',
-        'Коэфф.',
+        'Бонус',
+        'Лига',
         'Итог'
     ]);
 });
@@ -1344,71 +1386,21 @@ test('ФОТ без договоров отображается как тире,
     assert.ok(row);
     assert.equal(row.details.realization.displayText, '-');
     assert.equal(row.details.realization.sub, 'нет данных');
-    assert.equal(row.q.realization, 1);
-    assert.equal(row.q.umsrm, 1);
-    assert.equal(row.details.umsrm.displayText, undefined);
-    assert.equal(row.details.umsrm.sub, '100%');
+    assert.equal(row.realizationQ, 1);
+    // Без данных по управленке % УМС нейтрален (Q=1.0), а деталь честно говорит «нет данных».
+    assert.equal(row.q.ums, 1);
+    assert.equal(row.details.ums.sub, 'нет данных');
 });
 
-test('коэф аккаунта берется по связке ответственный+компания, а общий коэф считается как среднее из четырех частей', () => {
+test('коэффициент лиги считается как среднее долей объектов/ОПУ/выручки/трудоёмкости (Классификация партнера.xlsx)', () => {
     dashboard.applyTestState({
         partnerMap: {
-            p1: 'Партнер 1'
-        },
-        companyMap: {
-            c1: 'Kaspi bank AO',
-            c2: 'TOO "BI Service"'
-        },
-        lastUserMap: {
-            u1: 'Арайлым  Ташенова',
-            u2: 'Алина Сидорова'
-        },
-        accountCoefficientRows: [
-            { responsible: 'Арайлым Ташенова', company: 'Kaspi bank AO', coeff: 1.1, status: null },
-            { responsible: 'Алина Сидорова', company: 'TOO "BI Service"', coeff: 0.8, status: null }
-        ],
-        deals69: [
-            { ID: 'd1', COMPANY_ID: 'c1', ASSIGNED_BY_ID: 'u1', UF_CRM_1743669674: 'p1', UF_CRM_1707724024179: '100' },
-            { ID: 'd2', COMPANY_ID: 'c2', ASSIGNED_BY_ID: 'u2', UF_CRM_1743669674: 'p1', UF_CRM_1707724024179: '200' }
-        ]
-    });
-
-    dashboard.buildIndexes();
-    dashboard.processData();
-    dashboard.buildMatrixRows();
-
-    const row = dashboard.getMatrixRowsSnapshot().find(item => item.bitrixPartnerId === 'p1');
-    assert.ok(row);
-    assert.equal(Number(row.complexityParts.accountCoeff.toFixed(3)), 0.95);
-    assert.equal(Number(row.complexityParts.objectsCoeff.toFixed(3)), 1);
-    assert.equal(Number(row.complexityParts.areaCoeff.toFixed(3)), 1);
-    assert.equal(Number(row.complexityParts.opuCoeff.toFixed(3)), 1);
-    assert.equal(Number(row.complexityCoeff.toFixed(3)), 0.988);
-});
-
-test('коэф объектов и площади считаются по перцентилям сети, а не по старым жестким потолкам', () => {
-    dashboard.applyTestState({
-        partnerMap: {
-            low: 'Партнер low',
-            mid: 'Партнер mid',
-            high: 'Партнер high'
+            big: 'Бут Р.',       // ОПУ=138 в OPU_COMPLEXITY_SOURCE
+            small: 'Жандос Альсейтов' // ОПУ=12
         },
         deals69: [
-            { ID: 'l1', UF_CRM_1743669674: 'low', UF_CRM_1707724024179: '1000' },
-            { ID: 'm1', UF_CRM_1743669674: 'mid', UF_CRM_1707724024179: '5000' },
-            { ID: 'm2', UF_CRM_1743669674: 'mid', UF_CRM_1707724024179: '5000' },
-            { ID: 'm3', UF_CRM_1743669674: 'mid', UF_CRM_1707724024179: '5000' },
-            { ID: 'm4', UF_CRM_1743669674: 'mid', UF_CRM_1707724024179: '5000' },
-            { ID: 'm5', UF_CRM_1743669674: 'mid', UF_CRM_1707724024179: '5000' },
-            { ID: 'h1', UF_CRM_1743669674: 'high', UF_CRM_1707724024179: '30000' },
-            { ID: 'h2', UF_CRM_1743669674: 'high', UF_CRM_1707724024179: '30000' },
-            { ID: 'h3', UF_CRM_1743669674: 'high', UF_CRM_1707724024179: '30000' },
-            { ID: 'h4', UF_CRM_1743669674: 'high', UF_CRM_1707724024179: '30000' },
-            { ID: 'h5', UF_CRM_1743669674: 'high', UF_CRM_1707724024179: '30000' },
-            { ID: 'h6', UF_CRM_1743669674: 'high', UF_CRM_1707724024179: '30000' },
-            { ID: 'h7', UF_CRM_1743669674: 'high', UF_CRM_1707724024179: '30000' },
-            { ID: 'h8', UF_CRM_1743669674: 'high', UF_CRM_1707724024179: '30000' },
-            { ID: 'h9', UF_CRM_1743669674: 'high', UF_CRM_1707724024179: '30000' }
+            ...Array.from({ length: 9 }, (_, i) => ({ ID: `b${i}`, UF_CRM_1743669674: 'big', OPPORTUNITY: '100000' })),
+            { ID: 's1', UF_CRM_1743669674: 'small', OPPORTUNITY: '100000' }
         ]
     });
 
@@ -1417,17 +1409,48 @@ test('коэф объектов и площади считаются по пер
     dashboard.buildMatrixRows();
 
     const rows = dashboard.getMatrixRowsSnapshot();
-    const low = rows.find(item => item.bitrixPartnerId === 'low');
-    const mid = rows.find(item => item.bitrixPartnerId === 'mid');
-    const high = rows.find(item => item.bitrixPartnerId === 'high');
+    const big = rows.find(item => item.bitrixPartnerId === 'big');
+    const small = rows.find(item => item.bitrixPartnerId === 'small');
+    assert.ok(big && small);
 
-    assert.ok(low && mid && high);
-    assert.equal(Number(low.complexityParts.objectsCoeff.toFixed(2)), 0.8);
-    assert.equal(Number(mid.complexityParts.objectsCoeff.toFixed(2)), 1.0);
-    assert.equal(Number(high.complexityParts.objectsCoeff.toFixed(2)), 1.2);
-    assert.equal(Number(low.complexityParts.areaCoeff.toFixed(2)), 0.8);
-    assert.equal(Number(mid.complexityParts.areaCoeff.toFixed(2)), 1.0);
-    assert.equal(Number(high.complexityParts.areaCoeff.toFixed(2)), 1.2);
+    // doleObjects=0.9/0.1, doleRevenue=0.9/0.1, doleOpu=138/150=0.92 / 12/150=0.08,
+    // средний чек одинаковый у обоих → doleTrudo=0.5/0.5.
+    // coeff = (доли/4) × N(=2).
+    assert.equal(Number(big.leagueCoeff.toFixed(2)), 1.61);
+    assert.equal(Number(small.leagueCoeff.toFixed(2)), 0.39);
+    assert.equal(big.league, 'Бриллиант');
+    assert.equal(small.league, 'Золото');
+});
+
+test('лига Изумруд присваивается по правилу города Алматы даже при коэффициенте ниже 0.85 (Вариант 1)', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            almaty: 'Оспанова Г', // город Алматы в PARTNER_CITY_SOURCE (и ОПУ=182 в OPU_COMPLEXITY_SOURCE)
+            other: 'Партнер вне списка городов'
+        },
+        // У almaty портфель крошечный (1 объект) — её доля объектов/выручки почти нулевая,
+        // весь её коэффициент держится на доле ОПУ (182/182=1), но этого одного компонента
+        // не хватает, чтобы дотянуть до порога 0.85 без привилегии города.
+        deals69: [
+            { ID: 'a1', UF_CRM_1743669674: 'almaty', OPPORTUNITY: '1000' },
+            ...Array.from({ length: 99 }, (_, i) => ({ ID: `o${i}`, UF_CRM_1743669674: 'other', OPPORTUNITY: '1000' }))
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+    dashboard.buildMatrixRows();
+
+    const rows = dashboard.getMatrixRowsSnapshot();
+    const almaty = rows.find(item => item.bitrixPartnerId === 'almaty');
+    const other = rows.find(item => item.bitrixPartnerId === 'other');
+    assert.ok(almaty && other);
+
+    assert.equal(Number(almaty.leagueCoeff.toFixed(2)), 0.76);
+    assert.ok(almaty.leagueCoeff < 0.85);
+    // Без привилегии города это была бы «Золото» — но город=Алматы поднимает минимум до «Изумруд».
+    assert.equal(almaty.league, 'Изумруд');
+    assert.equal(other.league, 'Бриллиант');
 });
 
 test('в подписи замечаний показываются дни просрочки и количество замечаний, а не штраф', () => {
@@ -1673,17 +1696,18 @@ test('в количество замечаний попадают только �
     assert.equal(row.details.remarks.sub, '3/1');
 });
 
-test('К.ОПУ берется из ручных значений и считается по шкале 0.8-1.2', () => {
+test('доля ОПУ (из OPU_COMPLEXITY_SOURCE) растягивает коэффициент лиги пропорционально значению', () => {
     dashboard.applyTestState({
         partnerMap: {
-            low: 'Жандос Альсейтов',
-            mid: 'Айткулова А.',
-            high: 'Зобова Е.'
+            low: 'Жандос Альсейтов',  // ОПУ=12
+            mid: 'Айткулова А.',      // ОПУ=88
+            high: 'Зобова Е.'         // ОПУ=208
         },
+        // Объекты/выручка равные у всех троих — единственная переменная здесь доля ОПУ.
         deals69: [
-            { ID: 'd1', UF_CRM_1743669674: 'low', UF_CRM_1707724024179: '100' },
-            { ID: 'd2', UF_CRM_1743669674: 'mid', UF_CRM_1707724024179: '100' },
-            { ID: 'd3', UF_CRM_1743669674: 'high', UF_CRM_1707724024179: '100' }
+            { ID: 'd1', UF_CRM_1743669674: 'low', OPPORTUNITY: '100000' },
+            { ID: 'd2', UF_CRM_1743669674: 'mid', OPPORTUNITY: '100000' },
+            { ID: 'd3', UF_CRM_1743669674: 'high', OPPORTUNITY: '100000' }
         ]
     });
 
@@ -1697,15 +1721,170 @@ test('К.ОПУ берется из ручных значений и счита�
     const high = rows.find(item => item.bitrixPartnerId === 'high');
 
     assert.ok(low && mid && high);
-    assert.equal(Number(low.complexityParts.opuCoeff.toFixed(2)), 0.8);
-    assert.equal(Number(mid.complexityParts.opuCoeff.toFixed(2)), 1.0);
-    assert.equal(Number(high.complexityParts.opuCoeff.toFixed(2)), 1.2);
+    assert.equal(Number(low.leagueCoeff.toFixed(2)), 0.78);
+    assert.equal(Number(mid.leagueCoeff.toFixed(2)), 0.96);
+    assert.equal(Number(high.leagueCoeff.toFixed(2)), 1.26);
+    assert.ok(low.leagueCoeff < mid.leagueCoeff && mid.leagueCoeff < high.leagueCoeff);
 });
 
-test('скрытый буст коэфов площади и ОПУ применяется точечно и не вылезает за пределы', () => {
-    assert.equal(Number(dashboard.applyHiddenComplexityBoost('2362025', 'area', 1.05).toFixed(2)), 1.1);
-    assert.equal(Number(dashboard.applyHiddenComplexityBoost('2362027', 'opu', 0.99).toFixed(2)), 1.04);
-    assert.equal(Number(dashboard.applyHiddenComplexityBoost('2362025', 'opu', 1.19).toFixed(2)), 1.2);
-    assert.equal(Number(dashboard.applyHiddenComplexityBoost('2362025', 'account', 0.84).toFixed(2)), 0.87);
-    assert.equal(Number(dashboard.applyHiddenComplexityBoost('other', 'opu', 1.05).toFixed(2)), 1.05);
+test('getUmsPercentQ считает Q по нормативу 8% с допуском ±10% (симметрично)', () => {
+    dashboard.applyTestState({
+        partnerMap: {
+            p1: 'Партнер Один',
+            p2: 'Партнер Два',
+            p3: 'Партнер Три'
+        },
+        managementItems: [
+            // Точно на нормативе: УМС=80 000 из выручки без НДС 1 000 000 → 8% → Q=1
+            { 'Ответственное_лицо_ИП_инфо': 'Партнер Один', 'Месяц_начисления': '2026-03-31T19:00:00.000Z', 'Реализация без НДС': 1000000, 'Маржа Партнера': 100000, 'Маржа': 0.1, 'ИТОГО УМС': 80000 },
+            // Внутри допуска (факт 12%, отклонение 4% из 10% допуска) → Q=0.6
+            { 'Ответственное_лицо_ИП_инфо': 'Партнер Два', 'Месяц_начисления': '2026-03-31T19:00:00.000Z', 'Реализация без НДС': 1000000, 'Маржа Партнера': 100000, 'Маржа': 0.1, 'ИТОГО УМС': 120000 },
+            // Далеко за допуском (факт 30%, отклонение 22% > 10%) → Q=0
+            { 'Ответственное_лицо_ИП_инфо': 'Партнер Три', 'Месяц_начисления': '2026-03-31T19:00:00.000Z', 'Реализация без НДС': 1000000, 'Маржа Партнера': 100000, 'Маржа': 0.1, 'ИТОГО УМС': 300000 }
+        ]
+    });
+
+    dashboard.buildIndexes();
+
+    assert.equal(dashboard.getUmsPercentQ('p1'), 1);
+    assert.equal(Number(dashboard.getUmsPercentQ('p2').toFixed(2)), 0.6);
+    assert.equal(dashboard.getUmsPercentQ('p3'), 0);
+    // Без данных по управленке — нейтральная заглушка.
+    assert.equal(dashboard.getUmsPercentQ('нет-такого-партнера'), 1.0);
+});
+
+test('getCleanShareQ считает долю объектов без единого негативного замечания (привязка по UF_CRM_1743501476)', () => {
+    dashboard.applyTestState({
+        partnerMap: { p1: 'Партнер 1' },
+        deals69: [
+            { ID: 'd1', UF_CRM_1743669674: 'p1', TITLE: 'Объект 1', UF_CRM_1743501476: 'addr-1' },
+            { ID: 'd2', UF_CRM_1743669674: 'p1', TITLE: 'Объект 2', UF_CRM_1743501476: 'addr-2' },
+            { ID: 'd3', UF_CRM_1743669674: 'p1', TITLE: 'Объект 3', UF_CRM_1743501476: 'addr-3' },
+            { ID: 'd4', UF_CRM_1743669674: 'p1', TITLE: 'Объект 4', UF_CRM_1743501476: 'addr-4' }
+        ],
+        remarkDeals: [
+            // Два замечания на один и тот же объект (по адресу) — считается как один "грязный".
+            { UF_CRM_1743669674: 'p1', UF_CRM_1743501476: 'addr-1', UF_CRM_1719824872888: '43607', UF_CRM_REVIEWDATE: '2026-03-01', UF_CRM_FITBACK: '2026-03-02' },
+            { UF_CRM_1743669674: 'p1', UF_CRM_1743501476: 'addr-1', UF_CRM_1719824872888: '43607', UF_CRM_REVIEWDATE: '2026-03-05', UF_CRM_FITBACK: '2026-03-06' },
+            { UF_CRM_1743669674: 'p1', UF_CRM_1743501476: 'addr-2', UF_CRM_1719824872888: '43607', UF_CRM_REVIEWDATE: '2026-03-01', UF_CRM_FITBACK: '2026-03-02' },
+            // Замечание на объект, которого уже нет в активном портфеле (не в 69) — не считается.
+            { UF_CRM_1743669674: 'p1', UF_CRM_1743501476: 'addr-выбывший', UF_CRM_1719824872888: '43607', UF_CRM_REVIEWDATE: '2026-03-01', UF_CRM_FITBACK: '2026-03-02' }
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+
+    // 2 объекта из 4 «грязные» (addr-1 и addr-2) → 2 чистых из 4 → Q=0.5.
+    // Замечание на "addr-выбывший" не в портфеле — не учитывается.
+    assert.equal(dashboard.getCleanShareQ('p1'), 0.5);
+});
+
+test('getPositiveReviewBonus дает до +5 баллов пропорционально доле положительных отзывов', () => {
+    dashboard.applyTestState({
+        partnerMap: { p1: 'Партнер 1', p2: 'Партнер 2' },
+        deals69: [
+            { ID: 'd1', UF_CRM_1743669674: 'p1' },
+            { ID: 'd2', UF_CRM_1743669674: 'p2' }
+        ],
+        remarkDeals: [
+            // p1: 3 положительных, 1 негативное → 75% положительных → бонус 3.75
+            { UF_CRM_1743669674: 'p1', UF_CRM_1719824872888: '43713' },
+            { UF_CRM_1743669674: 'p1', UF_CRM_1719824872888: '43713' },
+            { UF_CRM_1743669674: 'p1', UF_CRM_1719824872888: '43713' },
+            { UF_CRM_1743669674: 'p1', UF_CRM_1719824872888: '43607', UF_CRM_REVIEWDATE: '2026-03-01', UF_CRM_FITBACK: '2026-03-02' }
+            // p2: отзывов вообще нет → бонус 0
+        ]
+    });
+
+    dashboard.buildIndexes();
+    dashboard.processData();
+
+    assert.equal(dashboard.getPositiveReviewBonus('p1'), 3.75);
+    assert.equal(dashboard.getPositiveReviewBonus('p2'), 0);
+});
+
+test('rounds/budget — нейтральные заглушки Q=1.0 до подключения источников данных', () => {
+    assert.equal(dashboard.getRoundsQ('любой-id'), 1.0);
+    assert.equal(dashboard.getBudgetQ('любой-id'), 1.0);
+});
+
+test('getAuditQ — нейтрален (1.0), пока партнёра ни разу не аудировали', () => {
+    assert.equal(dashboard.getAuditQ('любой-id'), 1.0);
+});
+
+test('computeAuditItemScore — да/нет критерий (binary)', () => {
+    const full = dashboard.computeAuditItemScore({ ufCrm_193_C01: '152975' }); // да → 1/1
+    assert.equal(full.achieved, 1);
+    assert.equal(full.maxApplicable, 1);
+    assert.equal(full.efficiency, 1);
+
+    const zero = dashboard.computeAuditItemScore({ ufCrm_193_C01: '152977' }); // нет → 0/1
+    assert.equal(zero.achieved, 0);
+    assert.equal(zero.efficiency, 0);
+});
+
+test('computeAuditItemScore — 3-уровневая шкала: направление lowGood/highGood учитывается', () => {
+    // C05 "Степень износа инвентаря" — низкая (лучший ответ) = max
+    const lowIsGood = dashboard.computeAuditItemScore({ ufCrm_193_C05: '152991' }); // низкая
+    assert.equal(lowIsGood.achieved, 3);
+    // C15 "Состояние спецодежды" — высокое (лучший ответ) = max (обратное направление)
+    const highIsGood = dashboard.computeAuditItemScore({ ufCrm_193_C15: '153049' }); // высокое
+    assert.equal(highIsGood.achieved, 3);
+    // Средний уровень — ровно половина максимума в обоих направлениях
+    const mid1 = dashboard.computeAuditItemScore({ ufCrm_193_C05: '152993' }); // средняя
+    assert.equal(mid1.achieved, 1.5);
+});
+
+test('computeAuditItemScore — критерий №37 (midGood): средняя нагрузка лучше всего, оба края = 0', () => {
+    assert.equal(dashboard.computeAuditItemScore({ ufCrm_193_C37: '153177' }).achieved, 0); // низкая
+    assert.equal(dashboard.computeAuditItemScore({ ufCrm_193_C37: '153179' }).achieved, 3); // средняя
+    assert.equal(dashboard.computeAuditItemScore({ ufCrm_193_C37: '153181' }).achieved, 0); // высокая
+});
+
+test('computeAuditItemScore — 5-балльная шкала: значение шкалы = балл', () => {
+    const score3of5 = dashboard.computeAuditItemScore({ ufCrm_193_C19: '153071' }); // "3"
+    assert.equal(score3of5.achieved, 3);
+    assert.equal(score3of5.maxApplicable, 5);
+    assert.equal(score3of5.efficiency, 0.6);
+});
+
+test('computeAuditItemScore — "н.п." исключается из числителя и знаменателя', () => {
+    // C07 допускает "н.п." — критерий не должен влиять ни на достигнутые, ни на макс. баллы
+    const withNa = dashboard.computeAuditItemScore({
+        ufCrm_193_C01: '152975', // да → 1/1
+        ufCrm_193_C07: '153007'  // н.п. → исключить
+    });
+    assert.equal(withNa.achieved, 1);
+    assert.equal(withNa.maxApplicable, 1); // не 4 — критерий C07 (max 3) не учтён
+    assert.equal(withNa.answeredCount, 1);
+});
+
+test('computeAuditItemScore — пустой черновик (ни один критерий не отвечен) → null', () => {
+    assert.equal(dashboard.computeAuditItemScore({}), null);
+});
+
+test('getAuditQ считает средний % эффективности по аудитам SPA 1398 за период', () => {
+    dashboard.applyTestState({
+        partnerMap: { p1: 'Партнер 1' },
+        auditEvalItems: [
+            {
+                ufCrm193Partner: 'p1',
+                ufCrm193Date: '2026-03-05',
+                ufCrm_193_C01: '152975', // да → 1/1 (100%)
+                ufCrm_193_C02: '152979'  // да → 1/1 (100%)
+            },
+            {
+                ufCrm193Partner: 'p1',
+                ufCrm193Date: '2026-03-20',
+                ufCrm_193_C01: '152977', // нет → 0/1 (0%)
+                ufCrm_193_C02: '152979'  // да → 1/1 (100%)
+            }
+        ]
+    });
+
+    dashboard.buildIndexes();
+
+    // Аудит 1: 2/2 = 100%. Аудит 2: 1/2 = 50%. Среднее по двум аудитам = 75%.
+    assert.equal(dashboard.getAuditQ('p1'), 0.75);
 });
