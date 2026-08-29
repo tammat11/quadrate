@@ -105,8 +105,12 @@ const bootstrapDbState = {
     lastSnapshot: null
 };
 
-const SELECT_DEALS = ['ID', 'CATEGORY_ID', 'STAGE_ID', 'COMPANY_ID', 'CONTACT_ID', 'UF_CRM_ACTIVE_ADDRESS', 'UF_CRM_1743669674', 'ASSIGNED_BY_ID', 'MOVED_TIME', 'CLOSEDATE', 'DATE_CREATE', 'OPPORTUNITY', 'UF_CRM_1707724024179', 'UF_CRM_1707145268405'];
-const SELECT_REMARKS = ['ID', 'TITLE', 'UF_CRM_1743669674', 'ASSIGNED_BY_ID', 'DATE_CREATE', 'UF_CRM_REVIEWDATE', 'UF_CRM_FITBACK', 'UF_CRM_1719824872888', 'UF_CRM_1732104149680'];
+// UF_CRM_1743501476 = "Адрес объекта инфо" — стабильная ссылка на объект (иблок 115),
+// 100% заполнена в 69 и ~88% в 81. Используется для точной привязки замечания к объекту
+// портфеля (вместо сравнения по TITLE) — см. getCleanShareQ/processData в dashboard.js.
+const SELECT_DEALS = ['ID', 'CATEGORY_ID', 'STAGE_ID', 'COMPANY_ID', 'CONTACT_ID', 'UF_CRM_ACTIVE_ADDRESS', 'UF_CRM_1743669674', 'ASSIGNED_BY_ID', 'MOVED_TIME', 'CLOSEDATE', 'DATE_CREATE', 'OPPORTUNITY', 'UF_CRM_1707724024179', 'UF_CRM_1707145268405', 'UF_CRM_1743501476'];
+// UF_CRM_1716804677915 = "Тип отзыва/замечания" (мультиселект, 11 значений) — тяжесть замечания.
+const SELECT_REMARKS = ['ID', 'TITLE', 'UF_CRM_1743669674', 'ASSIGNED_BY_ID', 'DATE_CREATE', 'UF_CRM_REVIEWDATE', 'UF_CRM_FITBACK', 'UF_CRM_1719824872888', 'UF_CRM_1732104149680', 'UF_CRM_1743501476', 'UF_CRM_1716804677915'];
 const MANAGEMENT_VIEW_COLUMNS = [
     'external_id',
     'Название',
@@ -444,9 +448,19 @@ async function ensureCabinetDbSchema() {
                     buh_services NUMERIC(18,2) NOT NULL DEFAULT 0,
                     ip_expenses NUMERIC(18,2) NOT NULL DEFAULT 0,
                     note TEXT NOT NULL DEFAULT '',
+                    deal_id TEXT NOT NULL DEFAULT '',
+                    bank_commission NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    notary_services NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    dividends NUMERIC(18,2) NOT NULL DEFAULT 0,
+                    inventory TEXT NOT NULL DEFAULT '',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+                ALTER TABLE management_entries ADD COLUMN IF NOT EXISTS deal_id TEXT NOT NULL DEFAULT '';
+                ALTER TABLE management_entries ADD COLUMN IF NOT EXISTS bank_commission NUMERIC(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE management_entries ADD COLUMN IF NOT EXISTS notary_services NUMERIC(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE management_entries ADD COLUMN IF NOT EXISTS dividends NUMERIC(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE management_entries ADD COLUMN IF NOT EXISTS inventory TEXT NOT NULL DEFAULT '';
             `);
             await client.query(`
                 CREATE INDEX IF NOT EXISTS management_entries_partner_month_idx
@@ -1706,6 +1720,7 @@ function assembleBootstrapPayload(data = {}) {
     const disciplineItems = Array.isArray(data.disciplineItems) ? data.disciplineItems : [];
     const opuItems = Array.isArray(data.opuItems) ? data.opuItems : [];
     const managementItems = Array.isArray(data.managementItems) ? data.managementItems : [];
+    const auditEvalItems = Array.isArray(data.auditEvalItems) ? data.auditEvalItems : [];
     const fotDbItems = Array.isArray(data.fotDbItems) ? data.fotDbItems : [];
 
     return {
@@ -1722,6 +1737,7 @@ function assembleBootstrapPayload(data = {}) {
         disciplineItems,
         opuItems,
         managementItems,
+        auditEvalItems,
         fotDbItems,
         counts: {
             partners117: Object.keys(partnerMap).length,
@@ -1735,6 +1751,7 @@ function assembleBootstrapPayload(data = {}) {
             discipline439: disciplineItems.length,
             training311: opuItems.length,
             management441: managementItems.length,
+            auditEval1398: auditEvalItems.length,
             fotDbItems: fotDbItems.length,
             accountCoefficientRows: accountCoefficientRows.length
         }
@@ -1767,6 +1784,7 @@ async function buildBootstrapData() {
         disciplineItems,
         opuItems,
         managementItems,
+        auditEvalItems,
         fotDbItems
     ] = await Promise.all([
         fetchAllDeals(69, SELECT_DEALS),
@@ -1776,6 +1794,12 @@ async function buildBootstrapData() {
         fetchAllItems(1364, { categoryId: 439 }),
         fetchAllItems(1254, { categoryId: 311 }),
         fetchAllItems(1254, { categoryId: 441 }),
+        // SPA "Оценка эффективности объекта" (аудит-чек-лист, 39 критериев). Единственная
+        // категория — 479 "Общая воронка".
+        fetchAllItems(1398, { categoryId: 479 }).catch(error => {
+            console.warn('fetchAllItems(1398) failed:', error.message || error);
+            return [];
+        }),
         fetchFotDbItems().catch(error => {
             console.warn('fetchFotDbItems failed:', error.message || error);
             return [];
@@ -1829,6 +1853,7 @@ async function buildBootstrapData() {
         disciplineItems,
         opuItems,
         managementItems,
+        auditEvalItems,
         fotDbItems
     });
 }
@@ -2107,6 +2132,52 @@ async function requestListener(req, res) {
         return;
     }
 
+    if (pathname === '/api/bitrix-app-install') {
+        // Bitrix's ONAPPINSTALL request — must call BX24.installFinish() via the JS SDK,
+        // otherwise the app is left in "installation incomplete" state (shown to every user).
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
+<script src="//api.bitrix24.com/api/v1/"></script>
+<script>
+    BX24.init(function() {
+        BX24.installFinish();
+    });
+</script>
+</body></html>`;
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(html);
+        return;
+    }
+
+    if (pathname === '/api/bitrix-app-handler') {
+        // Bitrix can send AUTH_ID/DOMAIN via GET params or POST form body
+        let bxToken = '', bxDomain = '';
+        const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+        bxToken = reqUrl.searchParams.get('AUTH_ID') || reqUrl.searchParams.get('auth_id') || '';
+        bxDomain = reqUrl.searchParams.get('DOMAIN') || reqUrl.searchParams.get('domain') || '';
+        if (req.method === 'POST' && (!bxToken || !bxDomain)) {
+            const raw = await readRequestBody(req);
+            const params = new URLSearchParams(raw || '');
+            bxToken = bxToken || params.get('AUTH_ID') || params.get('auth_id') || '';
+            bxDomain = bxDomain || params.get('DOMAIN') || params.get('domain') || '';
+        }
+        if (bxToken && bxDomain) {
+            const sessionToken = crypto.randomBytes(24).toString('hex');
+            const expiresAt = Date.now() + BX_APP_SESSION_TTL;
+            bitrixAppSessions.set(sessionToken, { userId: null, partnerBitrixId: null, partnerName: null, expiresAt, pendingAuth: { bxToken, bxDomain } });
+            const cookie = `bx_app_session=${sessionToken}; HttpOnly; SameSite=None; Secure; Path=/; Max-Age=28800`;
+            // Also pass session token via URL — mobile Bitrix webview often blocks third-party cookies
+            const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<script>window.location.replace('/bitrix-app.html?s=${sessionToken}');</script>
+</head><body></body></html>`;
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Set-Cookie': cookie });
+            res.end(html);
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('ok');
+        return;
+    }
+
     if (pathname === '/api/bitrix-app-config') {
         await handleBitrixAppConfig(req, res);
         return;
@@ -2122,8 +2193,109 @@ async function requestListener(req, res) {
 
 // ——— Bitrix App ———
 
+// Наши поля management_entries → UF-поля сделки (cat 79) с суффиксом "!" в Bitrix
+const DEAL_UF_FIELD_MAP = {
+    fot_official: 'UF_CRM_1736751790850',      // ФОТ! офф
+    fot_unofficial: 'UF_CRM_1726119447638',    // ФОТ! неофф
+    curators: 'UF_CRM_1763966593104',          // Кураторы!
+    pieceworkers: 'UF_CRM_1738134970274',      // Сдельщики!
+    ums: 'UF_CRM_1726810646955',               // УМС!
+    equipment_rent: 'UF_CRM_1726745128681',    // Аренда!
+    transport: 'UF_CRM_1726745136940',         // Транспортные расходы!
+    repairs: 'UF_CRM_1726745146928',           // Ремонт!
+    gen_cleaning: 'UF_CRM_1726745154584',      // Ген.уборка!
+    bank_commission: 'UF_CRM_1726745162913',   // Комиссия банка!
+    notary_services: 'UF_CRM_1726745171063',   // Нотариальные услуги!
+    dividends: 'UF_CRM_1726810952928',         // Дивиденты!
+    consulting: 'UF_CRM_1727786533181',        // Консалтинг!
+    equipment: 'UF_CRM_1727786558419',         // Оборудование!
+};
+const DEAL_REVENUE_FIELD = 'UF_CRM_1708321214833'; // "Сумма к оплате" — часть формулы "Реализация без НДС"
+const DEAL_ELS_FIELD = 'UF_CRM_1770022004522';      // Удержания ELS
+const DEAL_AVANS_FIELD = 'UF_CRM_1742971726491';    // Сумма авансирования
+const DEAL_FOT_SUM_FIELD = 'UF_CRM_ASVDS22';        // Сумма ФОТ (не путать с "Сумма ФОТ с НДС")
+
+// Only these fields are actually collected in the current mini-app form. We intentionally do NOT
+// push fot_official / bank_commission / notary_services / dividends to Bitrix even though they're
+// still in DEAL_UF_FIELD_MAP for reading — pushing them would overwrite existing Bitrix values with 0
+// since the form no longer has inputs for them.
+const DEAL_UF_WRITE_FIELDS = [
+    'fot_unofficial', 'curators', 'pieceworkers', 'ums', 'equipment_rent',
+    'transport', 'repairs', 'gen_cleaning', 'consulting', 'equipment',
+];
+
+// Cache of a partner's category-79 deals (raw Bitrix rows) — avoids re-fetching all pages
+// from Bitrix every time the user switches month in the UI.
+const partnerDealsCache = new Map(); // partnerBitrixId → { deals, expiresAt }
+const PARTNER_DEALS_TTL = 3 * 60 * 1000;
+
+async function getPartnerDealsCached(partnerBitrixId, bxBase) {
+    const cached = partnerDealsCache.get(partnerBitrixId);
+    if (cached && cached.expiresAt > Date.now()) return cached.deals;
+
+    const ufFieldNames = Object.values(DEAL_UF_FIELD_MAP);
+    const selectFields = ['ID', 'TITLE', 'UF_CRM_1711371065591', DEAL_REVENUE_FIELD, DEAL_ELS_FIELD, DEAL_AVANS_FIELD, DEAL_FOT_SUM_FIELD, 'COMPANY_ID', ...ufFieldNames];
+    const selectQs = selectFields.map((f, i) => `&SELECT[${i}]=${f}`).join('');
+    const filterQs = `FILTER[CATEGORY_ID]=79&FILTER[UF_CRM_1743669674]=${encodeURIComponent(partnerBitrixId)}`;
+
+    // ORDER DESC (newest deals first) — some partners have 1000+ historical deals, and pagination
+    // is capped for performance. Sorting descending ensures current-month deals (highest IDs)
+    // are always fetched, instead of being cut off behind years of old records.
+    const firstUrl = `${bxBase}crm.deal.list?${filterQs}${selectQs}&ORDER[ID]=DESC&start=0`;
+    const firstResp = await proxyRequest(firstUrl, { method: 'GET' });
+    const firstData = JSON.parse(firstResp.body || '{}');
+    let deals = firstData.result || [];
+    const total = firstData.total || deals.length;
+    const pageSize = deals.length || 50;
+
+    const remainingStarts = [];
+    for (let start = pageSize; start < total && remainingStarts.length < 29; start += pageSize) {
+        remainingStarts.push(start);
+    }
+
+    if (remainingStarts.length) {
+        const pages = await Promise.all(remainingStarts.map(start => {
+            const url = `${bxBase}crm.deal.list?${filterQs}${selectQs}&ORDER[ID]=DESC&start=${start}`;
+            return proxyRequest(url, { method: 'GET' })
+                .then(resp => JSON.parse(resp.body || '{}').result || [])
+                .catch(() => []);
+        }));
+        for (const page of pages) deals = deals.concat(page);
+    }
+
+    partnerDealsCache.set(partnerBitrixId, { deals, expiresAt: Date.now() + PARTNER_DEALS_TTL });
+    return deals;
+}
+
 const bitrixAppSessions = new Map(); // sessionToken → { partnerBitrixId, partnerName, userId, expiresAt }
+const BX_APP_SESSION_TTL = 8 * 60 * 60 * 1000; // 8 hours, sliding on activity
 const bitrixTokenCache = new Map();  // bxToken:domain → { userId, expiresAt }
+
+// Cache for list 117 (Ответственные лица ИП): userId → { partnerName, elementId }
+let list117Cache = null;
+let list117CacheAt = 0;
+const LIST_117_TTL = 10 * 60 * 1000;
+
+async function getList117Map() {
+    if (list117Cache && Date.now() - list117CacheAt < LIST_117_TTL) return list117Cache;
+    try {
+        const url = `${process.env.BITRIX_BASE}lists.element.get?IBLOCK_TYPE_ID=lists&IBLOCK_ID=117&IBLOCK_SECTION_ID=0&start=0`;
+        const resp = await proxyRequest(url, { method: 'GET' });
+        const data = JSON.parse(resp.body || '{}');
+        const map = {};
+        for (const el of (data.result || [])) {
+            const prop757 = el.PROPERTY_757 || {};
+            const userId = String(Object.values(prop757)[0] || '').trim();
+            if (userId) map[userId] = { partnerName: String(el.NAME || '').trim(), elementId: String(el.ID) };
+        }
+        list117Cache = map;
+        list117CacheAt = Date.now();
+        return map;
+    } catch (e) {
+        console.warn('list117 fetch failed:', e.message);
+        return list117Cache || {};
+    }
+}
 
 async function validateBitrixToken(token, domain) {
     const cacheKey = `${domain}:${token}`;
@@ -2205,6 +2377,25 @@ function calcEntryTotals(e) {
     return { revNet, fotTotal, umsTotal, partnerMargin, marginPct };
 }
 
+// Writes the "!" fields directly into the linked Bitrix deal (crm.deal.update),
+// so the data lands exactly in the same UF fields the sales team already uses —
+// no manual re-entry, no comment parsing, updates the real record.
+async function pushEntryToDealFields(entry) {
+    if (!BITRIX_BASE || !entry.deal_id) return;
+    const fieldsToUpdate = {};
+    for (const ourField of DEAL_UF_WRITE_FIELDS) {
+        fieldsToUpdate[DEAL_UF_FIELD_MAP[ourField]] = Number(entry[ourField]) || 0;
+    }
+    try {
+        await postJson(`${BITRIX_BASE}crm.deal.update.json`, {
+            id: entry.deal_id,
+            fields: fieldsToUpdate,
+        });
+    } catch (e) {
+        console.warn(`Bitrix deal ${entry.deal_id} UF field push failed:`, e.message || e);
+    }
+}
+
 async function pushEntryToBitrix(entry, mysqlExternalId) {
     if (!BITRIX_BASE) return;
     const t = calcEntryTotals(entry);
@@ -2233,13 +2424,26 @@ async function pushEntryToBitrix(entry, mysqlExternalId) {
 }
 
 function getBxAppSession(req) {
-    const token = parseCookies(req).bx_app_session;
+    let token = parseCookies(req).bx_app_session;
+    if (!token) {
+        // Fallback: session token passed via URL (?s=) or Authorization header — for webviews that block third-party cookies
+        try {
+            const url = new URL(req.url, `http://${req.headers.host}`);
+            token = url.searchParams.get('s') || '';
+        } catch {}
+        if (!token) {
+            const auth = req.headers['x-bx-session'];
+            if (auth) token = String(auth);
+        }
+    }
     if (!token) return null;
     const session = bitrixAppSessions.get(token);
     if (!session || session.expiresAt <= Date.now()) {
         bitrixAppSessions.delete(token);
         return null;
     }
+    // Sliding expiry — every active request extends the session so long form-filling sessions don't expire mid-work
+    session.expiresAt = Date.now() + BX_APP_SESSION_TTL;
     return session;
 }
 
@@ -2252,6 +2456,74 @@ async function handleBitrixAppConfig(req, res) {
 
 async function handleBitrixApp(req, res, pathname) {
     const sub = pathname.slice('/api/bitrix-app/'.length);
+
+    // GET /api/bitrix-app/me — resolve pending auth (after Bitrix handler redirect) or return current session
+    if (sub === 'me' && req.method === 'GET') {
+        const rawSession = getBxAppSession(req);
+        if (!rawSession) { sendJson(res, 401, { error: 'No session' }); return; }
+        // If session has pendingAuth, resolve it now
+        if (rawSession.pendingAuth) {
+            const { bxToken, bxDomain } = rawSession.pendingAuth;
+            rawSession.pendingAuth = null;
+            // Resolve via login flow inline
+            const cacheKey = `${bxDomain}:${bxToken}`;
+            let userId = null;
+            const cached = bitrixTokenCache.get(cacheKey);
+            if (cached && cached.expiresAt > Date.now()) {
+                userId = cached.userId;
+            } else {
+                const upstream = await proxyRequest(
+                    `https://${bxDomain}/rest/user.current.json?auth=${encodeURIComponent(bxToken)}`,
+                    { method: 'GET' }
+                );
+                const parsed = JSON.parse(upstream.body || '{}');
+                if (parsed.result?.ID) {
+                    userId = String(parsed.result.ID);
+                    bitrixTokenCache.set(cacheKey, { userId, expiresAt: Date.now() + 5 * 60 * 1000 });
+                }
+            }
+            rawSession.userId = userId;
+            rawSession.bxDomain = bxDomain;
+            rawSession.bxToken = bxToken;
+            const BX_ADMIN_USERS = new Set(['281', '1163']);
+            if (userId && !BX_ADMIN_USERS.has(userId)) {
+                // Primary lookup: list 117 (Ответственные лица ИП)
+                try {
+                    const list117 = await getList117Map();
+                    const entry = list117[userId];
+                    if (entry) {
+                        rawSession.partnerBitrixId = entry.elementId;
+                        rawSession.partnerName = entry.partnerName;
+                    }
+                } catch {}
+                // Fallback: cabinet_accounts table
+                if (!rawSession.partnerBitrixId && hasCabinetDbConfig()) {
+                    try {
+                        await ensureCabinetDbSchema();
+                        const { rows } = await queryCabinetDb(
+                            'SELECT partner_bitrix_id, employee_name, list_element_name FROM cabinet_accounts WHERE employee_id = $1 LIMIT 1',
+                            [userId]
+                        );
+                        if (rows[0]?.partner_bitrix_id) {
+                            rawSession.partnerBitrixId = rows[0].partner_bitrix_id;
+                            rawSession.partnerName = rows[0].employee_name || rows[0].list_element_name || null;
+                        }
+                    } catch {}
+                }
+            }
+        }
+        let allPartners = null;
+        if (!rawSession.partnerBitrixId) {
+            try {
+                const list117 = await getList117Map();
+                allPartners = Object.entries(list117)
+                    .map(([, v]) => ({ id: v.elementId, name: v.partnerName }))
+                    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+            } catch {}
+        }
+        sendJson(res, 200, { ok: true, partnerBitrixId: rawSession.partnerBitrixId, partnerName: rawSession.partnerName, allPartners });
+        return;
+    }
 
     // POST /api/bitrix-app/login — validate Bitrix token, create server session
     if (sub === 'login' && req.method === 'POST') {
@@ -2282,11 +2554,20 @@ async function handleBitrixApp(req, res, pathname) {
             bitrixTokenCache.set(cacheKey, { userId, expiresAt: Date.now() + 5 * 60 * 1000 });
         }
 
-        // Find partner by Bitrix user ID
+        // Find partner by Bitrix user ID — same resolution order as /me: list 117 first, then cabinet_accounts fallback
         let partnerBitrixId = null;
         let partnerName = null;
+        const BX_ADMIN_USERS = new Set(['281', '1163']);
         try {
-            if (hasCabinetDbConfig()) {
+            if (userId && !BX_ADMIN_USERS.has(userId)) {
+                const list117 = await getList117Map();
+                const entry = list117[userId];
+                if (entry) {
+                    partnerBitrixId = entry.elementId;
+                    partnerName = entry.partnerName;
+                }
+            }
+            if (!partnerBitrixId && hasCabinetDbConfig()) {
                 await ensureCabinetDbSchema();
                 const { rows } = await queryCabinetDb(
                     'SELECT partner_bitrix_id, employee_name, list_element_name FROM cabinet_accounts WHERE employee_id = $1 LIMIT 1',
@@ -2310,75 +2591,120 @@ async function handleBitrixApp(req, res, pathname) {
 
         // Build session
         const sessionToken = crypto.randomBytes(24).toString('hex');
-        const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hour
+        const expiresAt = Date.now() + BX_APP_SESSION_TTL;
         bitrixAppSessions.set(sessionToken, { userId, partnerBitrixId, partnerName, expiresAt });
-        const cookie = `bx_app_session=${sessionToken}; HttpOnly; SameSite=None; Secure; Path=/; Max-Age=3600`;
+        const cookie = `bx_app_session=${sessionToken}; HttpOnly; SameSite=None; Secure; Path=/; Max-Age=28800`;
 
         let allPartners = null;
         if (!partnerBitrixId) {
             try {
-                const accountsByPhone = await getCabinetAccounts(false).catch(() => ({}));
-                const seen = new Set();
-                allPartners = [];
-                for (const accounts of Object.values(accountsByPhone)) {
-                    for (const a of accounts || []) {
-                        if (a.partnerBitrixId && !seen.has(a.partnerBitrixId)) {
-                            seen.add(a.partnerBitrixId);
-                            allPartners.push({ id: a.partnerBitrixId, name: a.listElementName || a.employeeName || a.partnerBitrixId });
-                        }
-                    }
-                }
-                allPartners.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-            } catch {}
+                const list117 = await getList117Map();
+                allPartners = Object.values(list117)
+                    .map(v => ({ id: v.elementId, name: v.partnerName }))
+                    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+            } catch { allPartners = []; }
         }
 
-        sendJsonWithHeaders(res, 200, { ok: true, partnerBitrixId, partnerName, allPartners },
+        sendJsonWithHeaders(res, 200, { ok: true, partnerBitrixId, partnerName, allPartners, sessionToken },
             { 'Set-Cookie': cookie });
         return;
     }
 
-    // GET /api/bitrix-app/mysql-data?partner_id=&month=
-    if (sub === 'mysql-data' && req.method === 'GET') {
+    // GET /api/bitrix-app/deals?partner_id=&month=
+    if (sub === 'deals' && req.method === 'GET') {
         const session = getBxAppSession(req);
         if (!session) { sendJson(res, 401, { error: 'Session required' }); return; }
         const requestUrl = new URL(req.url, `http://${req.headers.host}`);
-        const month = String(requestUrl.searchParams.get('month') || '').trim();
+        const month = String(requestUrl.searchParams.get('month') || '').trim(); // YYYY-MM
         const partnerBitrixId = String(requestUrl.searchParams.get('partner_id') || session.partnerBitrixId || '').trim();
         if (!partnerBitrixId) { sendJson(res, 400, { error: 'partner_id required' }); return; }
 
-        // Fetch from MySQL Marja_full
-        const mysqlRows = await fetchManagementRows(month).catch(() => []);
-        // Filter by partner
-        const accountsByPhone = await getCabinetAccounts(false).catch(() => ({}));
-        let partnerName = '';
-        for (const accounts of Object.values(accountsByPhone)) {
-            const match = (accounts || []).find(a => String(a.partnerBitrixId) === partnerBitrixId);
-            if (match) { partnerName = match.listElementName || match.employeeName || ''; break; }
+        // Bitrix REST does not support >=/<= range filters on this custom date UF field
+        // (silently ignored — confirmed by testing), so we fetch all of the partner's deals
+        // in category 79 and filter by "Месяц начисления" locally. Cached per partner so
+        // switching months doesn't re-fetch from Bitrix every time.
+        const bxBase = BITRIX_BASE;
+        const allRawDeals = await getPartnerDealsCached(partnerBitrixId, bxBase);
+
+        // Months that actually have deals in 2026, for the month picker — only real months, not a fixed last-6 list
+        const availableMonths = [...new Set(
+            allRawDeals
+                .map(d => String(d.UF_CRM_1711371065591 || '').slice(0, 7))
+                .filter(m => /^2026-\d{2}$/.test(m))
+        )].sort().reverse();
+
+        let rawDeals = allRawDeals;
+        // Filter by selected month locally (UF_CRM_1711371065591 is an ISO date string)
+        if (month && /^\d{4}-\d{2}$/.test(month)) {
+            rawDeals = rawDeals.filter(d => {
+                const raw = d.UF_CRM_1711371065591;
+                if (!raw) return false;
+                return String(raw).slice(0, 7) === month;
+            });
         }
 
-        // Lazy lookup: build managementPartnerLookup locally
-        const partnerMap = {};
-        for (const accounts of Object.values(accountsByPhone)) {
-            for (const a of accounts || []) {
-                if (a.partnerBitrixId && (a.listElementName || a.employeeName)) {
-                    partnerMap[a.partnerBitrixId] = a.listElementName || a.employeeName;
+        // Resolve real company names via crm.company.get (batched)
+        const companyIds = [...new Set(rawDeals.map(d => d.COMPANY_ID).filter(Boolean))];
+        const companyNames = {};
+        if (companyIds.length) {
+            const batchCmds = {};
+            companyIds.forEach(id => { batchCmds[`c${id}`] = `crm.company.get?id=${id}`; });
+            try {
+                const batchResp = await proxyRequest(`${bxBase}batch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ halt: '0', ...Object.fromEntries(Object.entries(batchCmds).map(([k, v]) => [`cmd[${k}]`, v])) }).toString()
+                });
+                const batchData = JSON.parse(batchResp.body || '{}');
+                for (const [key, val] of Object.entries(batchData.result?.result || {})) {
+                    const id = key.slice(1);
+                    if (val?.TITLE) companyNames[id] = val.TITLE;
                 }
-            }
+            } catch (e) { console.warn('company batch fetch failed:', e.message); }
         }
-        const normName = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-        const partnerNameLower = normName(partnerName);
-        const rows = mysqlRows.filter(row => {
-            const candidates = [
-                row['Ответственное_лицо_ИП_инфо'],
-                row['Наименовение_компании_1'],
-                row['Наименование_ИП_инфо'],
-                row['Название'],
-                row['ФИО_1']
-            ];
-            return candidates.some(c => c && normName(c).includes(partnerNameLower.split(' ')[0]));
+
+        const deals = rawDeals.map(d => {
+            const bxValues = {};
+            for (const [ourField, ufField] of Object.entries(DEAL_UF_FIELD_MAP)) {
+                const val = Number(d[ufField]);
+                if (val) bxValues[ourField] = val;
+            }
+            const revenue = Number(d[DEAL_REVENUE_FIELD]) || 0;
+            const elsWithholding = Number(d[DEAL_ELS_FIELD]) || 0;
+            const avans = Number(d[DEAL_AVANS_FIELD]) || 0;
+            const fotSum = Number(d[DEAL_FOT_SUM_FIELD]) || 0;
+            // Реализация без НДС = Сумма к оплате + Удержания ELS + Сумма авансирования + Сумма ФОТ
+            const revenueNet = revenue + elsWithholding + avans + fotSum;
+            return {
+                id: d.ID,
+                title: d.TITLE,
+                month_field: d.UF_CRM_1711371065591,
+                revenue,
+                revenueNet,
+                company: companyNames[d.COMPANY_ID] || '',
+                bxValues, // значения "!" полей уже заполненные в самой сделке Bitrix
+            };
         });
 
-        sendJson(res, 200, { rows, partnerName, partnerBitrixId });
+        sendJson(res, 200, { deals, partnerBitrixId, partnerName: session.partnerName || '', availableMonths });
+        return;
+    }
+
+    // GET /api/bitrix-app/deal-history?deal_id=&partner_id= — last entries for this deal across months (for "copy from month")
+    if (sub === 'deal-history' && req.method === 'GET') {
+        const session = getBxAppSession(req);
+        if (!session) { sendJson(res, 401, { error: 'Session required' }); return; }
+        if (!hasCabinetDbConfig()) { sendJson(res, 200, { entries: [] }); return; }
+        await ensureCabinetDbSchema();
+        const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+        const dealId = String(requestUrl.searchParams.get('deal_id') || '').trim();
+        const partnerBitrixId = String(requestUrl.searchParams.get('partner_id') || session.partnerBitrixId || '').trim();
+        if (!dealId || !partnerBitrixId) { sendJson(res, 400, { error: 'deal_id and partner_id required' }); return; }
+        const { rows } = await queryCabinetDb(
+            'SELECT * FROM management_entries WHERE deal_id = $1 AND partner_bitrix_id = $2 ORDER BY month_key DESC LIMIT 12',
+            [dealId, partnerBitrixId]
+        );
+        sendJson(res, 200, { entries: rows });
         return;
     }
 
@@ -2415,6 +2741,7 @@ async function handleBitrixApp(req, res, pathname) {
             const nf = (k) => { const v = Number(body[k]); return Number.isFinite(v) ? v : 0; };
             const fields = {
                 partner_bitrix_id: partnerBitrixId, month_key: monthKey,
+                deal_id: String(body.deal_id || '').trim().slice(0, 50),
                 address: String(body.address || '').trim().slice(0, 500),
                 ip_name: String(body.ip_name || '').trim().slice(0, 300),
                 company_name: String(body.company_name || '').trim().slice(0, 300),
@@ -2431,9 +2758,10 @@ async function handleBitrixApp(req, res, pathname) {
                 official_salary: nf('official_salary'), self_employed_taxes: nf('self_employed_taxes'),
                 ipn_kpn: nf('ipn_kpn'), buh_services: nf('buh_services'),
                 ip_expenses: nf('ip_expenses'),
+                bank_commission: nf('bank_commission'), notary_services: nf('notary_services'),
+                dividends: nf('dividends'),
                 note: String(body.note || '').trim().slice(0, 1000)
             };
-            const mysqlExternalId = String(body.mysql_external_id || '').trim();
             const entryId = body.id ? Number(body.id) : null;
             let savedEntry;
             if (entryId) {
@@ -2456,8 +2784,10 @@ async function handleBitrixApp(req, res, pathname) {
                 );
                 savedEntry = rows[0];
             }
-            // Push to Bitrix async (don't block response)
-            pushEntryToBitrix(fields, mysqlExternalId).catch(e => console.warn('Bitrix push error:', e.message));
+            // Push straight into the deal's "!" UF fields in Bitrix, async (don't block response)
+            pushEntryToDealFields(fields).catch(e => console.warn('Bitrix UF push error:', e.message));
+            // Invalidate the partner's deals cache so the next list reflects the fresh values immediately
+            partnerDealsCache.delete(partnerBitrixId);
             sendJson(res, entryId ? 200 : 201, { entry: savedEntry });
             return;
         }

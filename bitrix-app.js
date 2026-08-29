@@ -5,11 +5,16 @@ const app = document.getElementById('bx-app');
 // ——— Состояние ———
 let currentPartner = null; // { id, name }
 let allPartners = [];
-let mysqlRows = [];       // данные из Marja_full
-let entries = [];         // наши данные из Postgres
+let deals = [];    // сделки из Bitrix cat 79
+let entries = [];  // внесённые данные из Postgres
 let editingId = null;
-let prefillMysql = null;  // строка из MySQL для предзаполнения
+let activeDealId = null; // deal.id для которого открыта форма
 let selectedMonth = getCurrentMonthKey();
+let selectedCompany = '';
+let availableMonths = []; // реальные месяцы 2026 года, за которые есть сделки в воронке 79
+let sortDir = 'asc'; // сортировка по марже: от минуса к плюсу по умолчанию
+// Session token — mobile Bitrix webview often blocks third-party cookies, so we pass it explicitly
+let sessionToken = new URLSearchParams(window.location.search).get('s') || '';
 
 function getCurrentMonthKey() {
     const d = new Date();
@@ -34,40 +39,48 @@ function escHtml(s) {
 }
 
 // ——— API ———
+function withSessionParam(path) {
+    if (!sessionToken) return path;
+    const sep = path.includes('?') ? '&' : '?';
+    return `${path}${sep}s=${encodeURIComponent(sessionToken)}`;
+}
+
 async function api(method, path, body) {
-    const opts = { method, credentials: 'same-origin' };
+    const opts = { method, credentials: 'same-origin', headers: {} };
+    if (sessionToken) opts.headers['X-Bx-Session'] = sessionToken;
     if (body !== undefined) {
-        opts.headers = { 'Content-Type': 'application/json' };
+        opts.headers['Content-Type'] = 'application/json';
         opts.body = JSON.stringify(body);
     }
-    const res = await fetch(path, opts);
+    const res = await fetch(withSessionParam(path), opts);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
 }
 
 // ——— Вычисления ———
-function calcTotals(e) {
+// Реализация без НДС = Сумма к оплате + Удержания ELS + Сумма авансирования + Сумма ФОТ (считается на сервере, приходит как deal.revenueNet)
+function calcTotals(e, revenueNet) {
     const n = (k) => Number(e[k]) || 0;
-    const revNet    = n('revenue_gross') - n('vat');
-    const fotTotal  = n('fot_official') + n('fot_unofficial') + n('kaspi_jti') + n('curators') + n('pieceworkers') + n('self_employed') + n('payroll_taxes') + n('official_salary');
-    const umsTotal  = n('ums') + n('ums_els') + n('eco_line_ums') + n('gen_cleaning');
-    const other     = n('advances') + n('transport') + n('equipment_rent') + n('goods') + n('repairs') + n('consulting') + n('equipment') + n('buh_services');
-    const taxes     = n('ipn_kpn') + n('self_employed_taxes') + n('ip_expenses');
-    const pMargin   = revNet - fotTotal - umsTotal - other - taxes;
-    const pct       = revNet !== 0 ? pMargin / revNet * 100 : null;
-    return { revNet, fotTotal, umsTotal, pMargin, pct };
+    const revNet = Number(revenueNet) || 0;
+    const fotTotal = n('fot_unofficial') + n('curators') + n('pieceworkers');
+    const umsTotal = n('ums') + n('gen_cleaning');
+    const otherExpenses = n('equipment_rent') + n('transport') + n('repairs') + n('consulting') + n('equipment');
+    const partnerMargin = revNet - fotTotal - umsTotal - otherExpenses;
+    const marginPct = revNet !== 0 ? (partnerMargin / revNet * 100) : null;
+    return { fotTotal, umsTotal, otherExpenses, partnerMargin, marginPct };
 }
 
-// ——— Шаблоны ———
+// Цвет маржи — просто по знаку: плюс зелёный, минус красный
+function marginColorClass(margin) {
+    if (margin === null || margin === undefined) return '';
+    return margin >= 0 ? 'is-pos' : 'is-neg';
+}
+
+// ——— Топбар с выбором месяца — только реальные месяцы 2026 года из воронки 79 ———
 function renderMonthBar() {
-    const options = [];
-    const now = new Date();
-    for (let i = 0; i < 6; i++) {
-        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        options.push({ key, label: formatMonthLabel(key) });
-    }
+    const months = availableMonths.length ? availableMonths : [selectedMonth];
+    const options = months.map(key => ({ key, label: formatMonthLabel(key) }));
     return `
         <div class="bxa-topbar">
             <div class="bxa-partner-name">${escHtml(currentPartner.name)}</div>
@@ -75,275 +88,390 @@ function renderMonthBar() {
                 <select class="bxa-select" id="monthSelect">
                     ${options.map(o => `<option value="${o.key}"${o.key === selectedMonth ? ' selected' : ''}>${o.label}</option>`).join('')}
                 </select>
-                <button class="bxa-btn bxa-btn-primary" id="addBtn">+ Добавить объект</button>
             </div>
-        </div>
-    `;
+        </div>`;
 }
 
-function renderMysqlTable() {
-    if (!mysqlRows.length) return '';
-    const key = (row) => String(row.external_id || '');
+// ——— Компания сделки (реальное название карточки компании из Bitrix) ———
+function dealCompany(deal) {
+    return (deal.company || '').trim();
+}
+
+function getCompanyList() {
+    const seen = new Set();
+    const list = [];
+    deals.forEach(d => {
+        const c = dealCompany(d);
+        if (c && !seen.has(c)) { seen.add(c); list.push(c); }
+    });
+    return list.sort((a, b) => a.localeCompare(b, 'ru'));
+}
+
+// ——— Список объектов (сделки из cat 79) ———
+function renderDeals() {
+    if (!deals.length) {
+        return `<div class="bxa-empty">Нет объектов с "Месяц начисления" = ${escHtml(formatMonthLabel(selectedMonth))}.<br>Проверьте, что поле заполнено в сделках воронки 79.</div>`;
+    }
+    const companies = getCompanyList();
+    let filtered = selectedCompany ? deals.filter(d => dealCompany(d) === selectedCompany) : deals.slice();
+
+    // Сортировка по марже: от минуса к плюсу (или наоборот по клику на заголовок)
+    const rowsData = filtered.map(deal => ({ deal, ...dealRowData(deal) }));
+    rowsData.sort((a, b) => {
+        const pa = a.c && a.c.marginPct !== null ? a.c.marginPct : Infinity;
+        const pb = b.c && b.c.marginPct !== null ? b.c.marginPct : Infinity;
+        return sortDir === 'asc' ? pa - pb : pb - pa;
+    });
+
+    // Итоги по всем видимым строкам — точная сумма по каждому полю (не по группам)
+    const fieldTotals = Object.fromEntries(TABLE_ROW_FIELDS.map(f => [f, 0]));
+    let totalRevenueNet = 0, totalMargin = 0;
+    rowsData.forEach(({ deal, c, e }) => {
+        totalRevenueNet += Number(deal.revenueNet) || 0;
+        if (e) TABLE_ROW_FIELDS.forEach(f => { fieldTotals[f] += Number(e[f]) || 0; });
+        if (c) totalMargin += c.partnerMargin;
+    });
+    const totalMarginPct = totalRevenueNet !== 0 ? (totalMargin / totalRevenueNet * 100) : null;
+
     return `
         <div class="bxa-section">
-            <div class="bxa-section-head">Данные из Marja_full <span class="bxa-badge">${mysqlRows.length}</span></div>
-            <div class="bxa-mysql-table-wrap">
-                <table class="bxa-mysql-table">
-                    <thead><tr>
-                        <th>Название / Адрес</th>
-                        <th>ИП</th>
-                        <th>Реализация без НДС</th>
-                        <th>ИТОГО ФОТ</th>
-                        <th>ИТОГО УМС</th>
-                        <th>Маржа партнёра</th>
-                        <th>Маржа %</th>
-                        <th></th>
-                    </tr></thead>
+            <div class="bxa-section-head bxa-section-head-filters">
+                <div class="bxa-section-head-row">
+                    <span>Объекты за ${escHtml(formatMonthLabel(selectedMonth))}</span>
+                    <span class="bxa-badge">${filtered.length}</span>
+                </div>
+                ${companies.length > 1 ? `
+                    <select class="bxa-select bxa-select-sm bxa-company-filter" id="companyFilter">
+                        <option value="">Все компании</option>
+                        ${companies.map(c => `<option value="${escHtml(c)}"${c === selectedCompany ? ' selected' : ''}>${escHtml(c)}</option>`).join('')}
+                    </select>` : ''}
+                <button type="button" class="bxa-btn bxa-btn-sm" id="transferPrevMonthBtn">↺ Перенести данные с прошлого месяца</button>
+            </div>
+            ${!filtered.length ? '<div class="bxa-empty">Нет объектов по выбранной компании.</div>' : ''}
+
+            <!-- Мобильные карточки -->
+            <div class="bxa-deals-cards">
+                ${rowsData.map(({ deal, c, filled }) => {
+                    const colorClass = c ? marginColorClass(c.partnerMargin) : '';
+                    return `
+                        <div class="bxa-deal-card ${filled ? 'is-filled' : ''}" data-open-deal="${escHtml(String(deal.id))}">
+                            <div class="bxa-deal-info">
+                                <div class="bxa-deal-title">${escHtml(deal.title)} <span class="bxa-deal-id">${escHtml(String(deal.id))}</span></div>
+                                ${Number(deal.revenue) ? `
+                                    <div class="bxa-deal-nums">
+                                        <div class="bxa-mini-chip"><span>Реализация</span><strong>${fmtMoney(deal.revenue)}</strong></div>
+                                        ${c ? `<div class="bxa-mini-chip bxa-mini-chip-total ${colorClass}"><span>Маржа</span><strong>${fmtMoney(c.partnerMargin)}</strong></div>` : ''}
+                                        ${c ? `<div class="bxa-mini-chip bxa-mini-chip-total ${colorClass}"><span>Маржинальность</span><strong>${c.marginPct !== null ? c.marginPct.toFixed(1) + '%' : '—'}</strong></div>` : ''}
+                                    </div>` : ''}
+                                ${!c && !Number(deal.revenue) ? '<div class="bxa-deal-empty">Не заполнено</div>' : ''}
+                            </div>
+                            <div class="bxa-deal-status">${filled ? '✓' : '+'}</div>
+                        </div>`;
+                }).join('')}
+            </div>
+
+            <!-- Табличный вид для компьютера — редактирование прямо в ячейках -->
+            <div class="bxa-deals-table-wrap">
+                <table class="bxa-deals-table">
+                    <thead>
+                        <tr>
+                            <th class="bxa-col-title">Клиент / Объект</th>
+                            <th>Реализация без НДС</th>
+                            <th>ФОТ неофф.</th>
+                            <th>Кураторы</th>
+                            <th>УМС</th>
+                            <th>Аренда тех.</th>
+                            <th>Транспорт</th>
+                            <th>Ремонт</th>
+                            <th>Ген.уборка</th>
+                            <th>Консалтинг</th>
+                            <th>Оборудование</th>
+                            <th>Сумма маржи</th>
+                            <th class="bxa-th-sortable" id="marginSortHead" data-dir="${sortDir}">Маржинальность <span class="bxa-sort-icon">${sortDir === 'asc' ? '▲' : '▼'}</span></th>
+                        </tr>
+                    </thead>
                     <tbody>
-                        ${mysqlRows.map(row => {
-                            const revNet = Number(row['Реализация без НДС']) || (Number(row['Реализация с НДС']) - Number(row['НДС']));
-                            const fotTotal = Number(row['ИТОГО ФОТ']) || 0;
-                            const umsTotal = Number(row['ИТОГО УМС']) || 0;
-                            const pMargin = Number(row['Маржа Партнера']) || 0;
-                            const pct = Number(row['Маржа']) || 0;
-                            const pctClass = pct < 0.12 ? 'is-good' : pct < 0.30 ? 'is-warn' : 'is-bad';
+                        ${rowsData.map(({ deal, c, filled, e }) => {
+                            const val = (k) => e && Number(e[k]) ? Number(e[k]) : '';
+                            const input = (k) => `<input class="bxa-cell-input" type="text" inputmode="decimal" data-deal-id="${escHtml(String(deal.id))}" data-field="${k}" value="${val(k) ? fmtMoney(val(k)) : ''}" placeholder="0">`;
+                            const colorClass = c ? marginColorClass(c.partnerMargin) : '';
                             return `
-                                <tr data-mysql-id="${escHtml(key(row))}">
-                                    <td>${escHtml(row['Название'] || row['Адрес_объекта_инфо'] || '—')}</td>
-                                    <td>${escHtml(row['Наименование_ИП_инфо'] || '—')}</td>
-                                    <td class="num">${fmtMoney(revNet)}</td>
-                                    <td class="num">${fmtMoney(fotTotal)}</td>
-                                    <td class="num">${fmtMoney(umsTotal)}</td>
-                                    <td class="num">${fmtMoney(pMargin)}</td>
-                                    <td class="num ${pctClass}">${(pct * 100).toFixed(1)}%</td>
-                                    <td><button class="bxa-btn bxa-btn-sm" data-prefill="${escHtml(key(row))}">Внести</button></td>
-                                </tr>
-                            `;
+                                <tr class="bxa-deals-row ${filled ? 'is-filled' : ''}" data-deal-id="${escHtml(String(deal.id))}">
+                                    <td class="bxa-col-title">
+                                        <div class="bxa-table-title">${escHtml(deal.title)}</div>
+                                        <span class="bxa-deal-id">${escHtml(String(deal.id))}</span>
+                                    </td>
+                                    <td class="bxa-num-cell">${Number(deal.revenueNet) ? fmtMoney(deal.revenueNet) : '—'}</td>
+                                    <td class="bxa-cell">${input('fot_unofficial')}</td>
+                                    <td class="bxa-cell">${input('curators')}</td>
+                                    <td class="bxa-cell">${input('ums')}</td>
+                                    <td class="bxa-cell">${input('equipment_rent')}</td>
+                                    <td class="bxa-cell">${input('transport')}</td>
+                                    <td class="bxa-cell">${input('repairs')}</td>
+                                    <td class="bxa-cell">${input('gen_cleaning')}</td>
+                                    <td class="bxa-cell">${input('consulting')}</td>
+                                    <td class="bxa-cell">${input('equipment')}</td>
+                                    <td class="bxa-num-cell bxa-margin-sum-cell ${colorClass}" data-margin-sum-cell>${c ? fmtMoney(c.partnerMargin) : '—'}</td>
+                                    <td class="bxa-num-cell bxa-margin-cell ${colorClass}" data-margin-cell>${c && c.marginPct !== null ? c.marginPct.toFixed(1) + '%' : '—'}</td>
+                                </tr>`;
                         }).join('')}
                     </tbody>
                 </table>
             </div>
-        </div>
-    `;
+            <!-- Итоговая строка — отдельная таблица ВНЕ прокручиваемой области, чтобы не зависеть
+                 от position:sticky на tfoot/td (ненадёжно работает в связке с border-collapse
+                 в разных браузерах — строка обрезалась/пропадала при скролле). Всегда видна целиком. -->
+            <div class="bxa-deals-totals-wrap">
+                <table class="bxa-deals-table bxa-deals-totals-table">
+                    <tbody>
+                        <tr class="bxa-totals-row">
+                            <td class="bxa-col-title">Итого</td>
+                            <td class="bxa-num-cell">${fmtMoney(totalRevenueNet)}</td>
+                            <td class="bxa-num-cell">${fmtMoney(fieldTotals.fot_unofficial)}</td>
+                            <td class="bxa-num-cell">${fmtMoney(fieldTotals.curators)}</td>
+                            <td class="bxa-num-cell">${fmtMoney(fieldTotals.ums)}</td>
+                            <td class="bxa-num-cell">${fmtMoney(fieldTotals.equipment_rent)}</td>
+                            <td class="bxa-num-cell">${fmtMoney(fieldTotals.transport)}</td>
+                            <td class="bxa-num-cell">${fmtMoney(fieldTotals.repairs)}</td>
+                            <td class="bxa-num-cell">${fmtMoney(fieldTotals.gen_cleaning)}</td>
+                            <td class="bxa-num-cell">${fmtMoney(fieldTotals.consulting)}</td>
+                            <td class="bxa-num-cell">${fmtMoney(fieldTotals.equipment)}</td>
+                            <td class="bxa-num-cell ${marginColorClass(totalMargin)}">${fmtMoney(totalMargin)}</td>
+                            <td class="bxa-num-cell ${marginColorClass(totalMargin)}">${totalMarginPct !== null ? totalMarginPct.toFixed(1) + '%' : '—'}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>`;
 }
 
-function renderEntries() {
-    if (!entries.length) {
-        return `<div class="bxa-empty">Внесённых данных за ${escHtml(formatMonthLabel(selectedMonth))} нет.</div>`;
+// Поля-колонки, реально показанные и редактируемые в таблице
+const TABLE_ROW_FIELDS = ['fot_unofficial','curators','ums','equipment_rent','transport','repairs','gen_cleaning','consulting','equipment'];
+// Поля, которые убрали из UI по просьбе заказчика, но их значения нельзя терять при автосохранении —
+// переносим их как есть из уже сохранённой записи/данных Bitrix, не давая пользователю их редактировать здесь
+const PRESERVED_FIELDS = ['pieceworkers'];
+
+function parseNum(raw) {
+    if (raw === null || raw === undefined) return 0;
+    const cleaned = String(raw).replace(/[^\d.,-]/g, '').replace(',', '.');
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : 0;
+}
+
+function bindTableInputs() {
+    const table = document.querySelector('.bxa-deals-table');
+    if (!table) return;
+    table.querySelectorAll('.bxa-cell-input').forEach(input => {
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
+        input.addEventListener('focus', () => {
+            // На время редактирования показываем «сырое» число без разделителей тысяч
+            const n = parseNum(input.value);
+            input.value = n ? String(n) : '';
+        });
+        input.addEventListener('blur', () => {
+            const n = parseNum(input.value);
+            input.value = n ? fmtMoney(n) : '';
+            saveTableRow(input.dataset.dealId);
+        });
+    });
+    table.querySelector('#marginSortHead')?.addEventListener('click', () => {
+        sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        document.getElementById('dealsArea').innerHTML = renderDeals();
+        bindDealActions();
+    });
+}
+
+let rowSaveTimers = {};
+async function saveTableRow(dealId) {
+    const row = document.querySelector(`.bxa-deals-row[data-deal-id="${dealId}"]`);
+    if (!row) return;
+    const deal = deals.find(d => String(d.id) === String(dealId));
+    if (!deal) return;
+
+    const existingEntry = entries.find(en => en.deal_id === String(dealId));
+    const preservedSource = existingEntry || deal.bxValues || {};
+
+    const values = {};
+    TABLE_ROW_FIELDS.forEach(f => {
+        const el = row.querySelector(`[data-field="${f}"]`);
+        values[f] = parseNum(el?.value);
+    });
+    // Переносим скрытые поля (Сдельщики и т.п.) неизменными — они не редактируются в этой таблице
+    PRESERVED_FIELDS.forEach(f => { values[f] = Number(preservedSource[f]) || 0; });
+
+    const hasAnyValue = TABLE_ROW_FIELDS.some(f => values[f]);
+
+    // Live-update margin cells instantly, before the network round-trip
+    const marginCell = row.querySelector('[data-margin-cell]');
+    const marginSumCell = row.querySelector('[data-margin-sum-cell]');
+    const c = calcTotals(values, deal.revenueNet);
+    const colorClass = hasAnyValue ? marginColorClass(c.partnerMargin) : '';
+    if (marginCell) {
+        marginCell.textContent = hasAnyValue && c.marginPct !== null ? c.marginPct.toFixed(1) + '%' : '—';
+        marginCell.className = 'bxa-num-cell bxa-margin-cell' + (colorClass ? ' ' + colorClass : '');
     }
-    return `
-        <div class="bxa-section">
-            <div class="bxa-section-head">Внесённые данные <span class="bxa-badge">${entries.length}</span></div>
-            ${entries.map(e => {
-                const c = calcTotals(e);
-                const pctTxt = c.pct !== null ? c.pct.toFixed(1) + '%' : '—';
-                const pctClass = c.pct === null ? '' : c.pct < 12 ? 'is-good' : c.pct < 30 ? 'is-warn' : 'is-bad';
-                return `
-                    <div class="bxa-entry">
-                        <div class="bxa-entry-top">
-                            <div>
-                                <div class="bxa-entry-name">${escHtml(e.address || '—')}</div>
-                                ${e.ip_name ? `<div class="bxa-entry-sub">${escHtml(e.ip_name)}</div>` : ''}
-                            </div>
-                            <div class="bxa-entry-acts">
-                                <button class="bxa-icon-btn" data-edit="${e.id}">✎</button>
-                                <button class="bxa-icon-btn bxa-icon-del" data-delete="${e.id}">✕</button>
-                            </div>
-                        </div>
-                        <div class="bxa-entry-nums">
-                            <div class="bxa-num-item"><span>Реализация (без НДС)</span><strong>${fmtMoney(c.revNet)}</strong></div>
-                            <div class="bxa-num-item"><span>ИТОГО ФОТ</span><strong>${fmtMoney(c.fotTotal)}</strong></div>
-                            <div class="bxa-num-item"><span>ИТОГО УМС</span><strong>${fmtMoney(c.umsTotal)}</strong></div>
-                            <div class="bxa-num-item"><span>Маржа партнёра</span><strong>${fmtMoney(c.pMargin)}</strong></div>
-                            <div class="bxa-num-item"><span>Маржа %</span><strong class="${pctClass}">${pctTxt}</strong></div>
-                        </div>
-                    </div>
-                `;
-            }).join('')}
-        </div>
-    `;
+    if (marginSumCell) {
+        marginSumCell.textContent = hasAnyValue ? fmtMoney(c.partnerMargin) : '—';
+        marginSumCell.className = 'bxa-num-cell bxa-margin-sum-cell' + (colorClass ? ' ' + colorClass : '');
+    }
+    row.classList.toggle('is-filled', hasAnyValue);
+
+    // Nothing entered and no saved row exists — nothing to persist
+    if (!hasAnyValue && !existingEntry) return;
+
+    // Debounce network save per row so fast tabbing between fields doesn't fire N requests
+    clearTimeout(rowSaveTimers[dealId]);
+    rowSaveTimers[dealId] = setTimeout(async () => {
+        const payload = {
+            ...values,
+            deal_id: String(dealId),
+            month_key: selectedMonth,
+            address: existingEntry?.address || deal.title,
+        };
+        if (existingEntry) payload.id = existingEntry.id;
+        row.classList.add('is-saving');
+        try {
+            const result = await api('POST', `/api/bitrix-app/entries?partner_id=${encodeURIComponent(currentPartner.id)}`, payload);
+            if (existingEntry) {
+                entries = entries.map(en => Number(en.id) === Number(existingEntry.id) ? result.entry : en);
+            } else {
+                entries = [result.entry, ...entries];
+            }
+            row.classList.toggle('is-filled', hasAnyValue);
+        } catch (err) {
+            showNotice(err.message || 'Ошибка сохранения');
+        } finally {
+            row.classList.remove('is-saving');
+        }
+    }, 500);
 }
 
-function renderForm(entry = null, mysql = null) {
-    const v = (k) => {
-        if (entry && (Number(entry[k]) || entry[k])) return Number(entry[k]) || '';
-        if (mysql) {
-            const map = {
-                revenue_gross: 'Реализация с НДС', vat: 'НДС',
-                fot_official: 'ФОТ ОФФ Битрикс', fot_unofficial: 'ФОТ НЕОФ',
-                kaspi_jti: 'Kaspi/ JTI', curators: 'Кураторы', pieceworkers: 'Сдельщики',
-                self_employed: 'Самозанятые', payroll_taxes: 'Налоги_по_зарплате',
-                official_salary: 'ОФ ЗП 1С',
-                ums: 'УМС', ums_els: 'УМС ELS', eco_line_ums: 'Eco Line УМС', gen_cleaning: 'Ген. Уборка',
-                advances: 'Авансирования', transport: 'Транспортные расходы',
-                equipment_rent: 'Аренда спецтехники', goods: 'Сумма_Товара',
-                repairs: 'Ремонт', consulting: 'Консалтинг', equipment: 'Оборудование',
-                buh_services: 'Бух. Услуги', ipn_kpn: 'ИПН/КПН',
-                self_employed_taxes: 'Налоги самозанятых', ip_expenses: 'Расходы ИП'
-            };
-            const val = mysql[map[k]];
-            return val ? Number(val) || '' : '';
-        }
-        return '';
-    };
-    const s = (k) => {
-        if (entry) return escHtml(entry[k] || '');
-        if (mysql) {
-            const strMap = { address: ['Адрес_объекта_инфо','Название'], ip_name: ['Наименование_ИП_инфо'], company_name: ['Наименовение_компании_1'] };
-            for (const col of (strMap[k] || [])) {
-                if (mysql[col]) return escHtml(mysql[col]);
-            }
-        }
-        return '';
-    };
-    const month = entry ? escHtml(entry.month_key) : (mysql ? escHtml(mysql['__month_key'] || selectedMonth) : selectedMonth);
-    const mysqlId = mysql ? String(mysql.external_id || '') : (entry?.mysql_external_id || '');
+function dealRowData(deal) {
+    const entry = entries.find(e => e.deal_id === String(deal.id));
+    const hasBxValues = deal.bxValues && Object.keys(deal.bxValues).length > 0;
+    const source = entry || (hasBxValues ? deal.bxValues : null);
+    const hasAnyValue = source && TABLE_ROW_FIELDS.some(f => Number(source[f]));
+    const c = hasAnyValue ? calcTotals(source, deal.revenueNet) : null;
+    const filled = !!entry && hasAnyValue;
+    return { entry, c, filled, e: source };
+}
 
+// ——— Форма ———
+function renderForm(deal, entry = null) {
+    const bxValues = (!entry && deal.bxValues) ? deal.bxValues : null;
+    const v = (k) => {
+        if (entry) return Number(entry[k]) || '';
+        if (bxValues && bxValues[k]) return bxValues[k];
+        return '';
+    };
+    const s = (k) => entry ? escHtml(entry[k] || '') : '';
     return `
+        <div class="bxa-form-header">
+            <div>
+                <div class="bxa-form-deal-title">${escHtml(deal.title)} <span class="bxa-deal-id">${escHtml(String(deal.id))}</span></div>
+                ${Number(deal.revenueNet) ? `<div class="bxa-form-deal-rev">Реализация без НДС: <strong>${fmtMoney(deal.revenueNet)}</strong></div>` : ''}
+            </div>
+            <button type="button" id="closeFormBtn" class="bxa-icon-btn">✕</button>
+        </div>
+        ${bxValues ? '<div class="bxa-bx-notice">Часть полей предзаполнена из данных Bitrix — проверьте и сохраните</div>' : ''}
+
+        <div class="bxa-copy-bar" id="copyBar"></div>
+
         <form class="bxa-form" id="mgmtForm">
             <input type="hidden" name="id" value="${entry ? entry.id : ''}">
-            <input type="hidden" name="mysql_external_id" value="${escHtml(mysqlId)}">
-            ${mysql ? `<div class="bxa-form-source">Данные из Marja_full · ${escHtml(mysql['Название'] || mysql['Адрес_объекта_инфо'] || '')}</div>` : ''}
-
-            <div class="bxa-form-section">
-                <div class="bxa-form-row bxa-form-row-4">
-                    <label class="bxa-label">Месяц <span class="bxa-req">*</span>
-                        <input class="bxa-input" type="month" name="month_key" required value="${month}">
-                    </label>
-                    <label class="bxa-label">Адрес объекта
-                        <input class="bxa-input" type="text" name="address" value="${s('address')}" placeholder="ул. Абая, 10">
-                    </label>
-                    <label class="bxa-label">ИП
-                        <input class="bxa-input" type="text" name="ip_name" value="${s('ip_name')}" placeholder="ИП Иванов">
-                    </label>
-                    <label class="bxa-label">Компания
-                        <input class="bxa-input" type="text" name="company_name" value="${s('company_name')}" placeholder="ТОО Пример">
-                    </label>
-                </div>
-            </div>
-
-            <div class="bxa-form-section">
-                <div class="bxa-section-title">Реализация</div>
-                <div class="bxa-form-row">
-                    <label class="bxa-label">С НДС<input class="bxa-input bxa-num" type="number" name="revenue_gross" value="${v('revenue_gross')}" placeholder="0"></label>
-                    <label class="bxa-label">НДС<input class="bxa-input bxa-num" type="number" name="vat" value="${v('vat')}" placeholder="0"></label>
-                    <div class="bxa-computed"><span>Без НДС</span><strong data-c="revNet">—</strong></div>
-                </div>
-            </div>
+            <input type="hidden" name="deal_id" value="${escHtml(String(deal.id))}">
+            <input type="hidden" name="month_key" value="${escHtml(selectedMonth)}">
+            <input type="hidden" name="address" value="${entry ? s('address') : escHtml(deal.title)}">
+            <!-- Сдельщики убраны из формы, но значение сохраняем неизменным, чтобы не затирать данные -->
+            <input type="hidden" name="pieceworkers" value="${v('pieceworkers') || 0}">
 
             <div class="bxa-form-section">
                 <div class="bxa-section-title">ФОТ</div>
                 <div class="bxa-form-row">
-                    <label class="bxa-label">ФОТ офф.<input class="bxa-input bxa-num" type="number" name="fot_official" value="${v('fot_official')}" placeholder="0"></label>
-                    <label class="bxa-label">ФОТ неофф.<input class="bxa-input bxa-num" type="number" name="fot_unofficial" value="${v('fot_unofficial')}" placeholder="0"></label>
-                    <label class="bxa-label">Каспи/JTI<input class="bxa-input bxa-num" type="number" name="kaspi_jti" value="${v('kaspi_jti')}" placeholder="0"></label>
-                    <label class="bxa-label">Кураторы<input class="bxa-input bxa-num" type="number" name="curators" value="${v('curators')}" placeholder="0"></label>
-                    <label class="bxa-label">Сдельщики<input class="bxa-input bxa-num" type="number" name="pieceworkers" value="${v('pieceworkers')}" placeholder="0"></label>
-                    <label class="bxa-label">Самозанятые<input class="bxa-input bxa-num" type="number" name="self_employed" value="${v('self_employed')}" placeholder="0"></label>
-                    <label class="bxa-label">Налоги з/п<input class="bxa-input bxa-num" type="number" name="payroll_taxes" value="${v('payroll_taxes')}" placeholder="0"></label>
-                    <label class="bxa-label">ОФ ЗП 1С<input class="bxa-input bxa-num" type="number" name="official_salary" value="${v('official_salary')}" placeholder="0"></label>
-                    <div class="bxa-computed"><span>ИТОГО ФОТ</span><strong data-c="fotTotal">—</strong></div>
+                    <label class="bxa-label">ФОТ неофф.<input class="bxa-input bxa-num" inputmode="decimal" type="number" name="fot_unofficial" value="${v('fot_unofficial')}" placeholder="0"></label>
+                    <label class="bxa-label">Кураторы<input class="bxa-input bxa-num" inputmode="decimal" type="number" name="curators" value="${v('curators')}" placeholder="0"></label>
                 </div>
             </div>
 
             <div class="bxa-form-section">
-                <div class="bxa-section-title">УМС</div>
+                <div class="bxa-section-title">Расходы</div>
                 <div class="bxa-form-row">
-                    <label class="bxa-label">УМС<input class="bxa-input bxa-num" type="number" name="ums" value="${v('ums')}" placeholder="0"></label>
-                    <label class="bxa-label">УМС ELS<input class="bxa-input bxa-num" type="number" name="ums_els" value="${v('ums_els')}" placeholder="0"></label>
-                    <label class="bxa-label">Eco Line УМС<input class="bxa-input bxa-num" type="number" name="eco_line_ums" value="${v('eco_line_ums')}" placeholder="0"></label>
-                    <label class="bxa-label">Ген. уборка<input class="bxa-input bxa-num" type="number" name="gen_cleaning" value="${v('gen_cleaning')}" placeholder="0"></label>
-                    <div class="bxa-computed"><span>ИТОГО УМС</span><strong data-c="umsTotal">—</strong></div>
+                    <label class="bxa-label">УМС<input class="bxa-input bxa-num" inputmode="decimal" type="number" name="ums" value="${v('ums')}" placeholder="0"></label>
+                    <label class="bxa-label">Аренда тех.<input class="bxa-input bxa-num" inputmode="decimal" type="number" name="equipment_rent" value="${v('equipment_rent')}" placeholder="0"></label>
+                    <label class="bxa-label">Транспорт<input class="bxa-input bxa-num" inputmode="decimal" type="number" name="transport" value="${v('transport')}" placeholder="0"></label>
+                    <label class="bxa-label">Ремонт<input class="bxa-input bxa-num" inputmode="decimal" type="number" name="repairs" value="${v('repairs')}" placeholder="0"></label>
+                    <label class="bxa-label">Ген.уборка<input class="bxa-input bxa-num" inputmode="decimal" type="number" name="gen_cleaning" value="${v('gen_cleaning')}" placeholder="0"></label>
+                    <label class="bxa-label">Консалтинг<input class="bxa-input bxa-num" inputmode="decimal" type="number" name="consulting" value="${v('consulting')}" placeholder="0"></label>
+                    <label class="bxa-label">Оборудование<input class="bxa-input bxa-num" inputmode="decimal" type="number" name="equipment" value="${v('equipment')}" placeholder="0"></label>
                 </div>
-            </div>
-
-            <div class="bxa-form-section">
-                <div class="bxa-section-title">Прочие расходы</div>
-                <div class="bxa-form-row">
-                    <label class="bxa-label">Авансирования<input class="bxa-input bxa-num" type="number" name="advances" value="${v('advances')}" placeholder="0"></label>
-                    <label class="bxa-label">Транспорт<input class="bxa-input bxa-num" type="number" name="transport" value="${v('transport')}" placeholder="0"></label>
-                    <label class="bxa-label">Аренда техники<input class="bxa-input bxa-num" type="number" name="equipment_rent" value="${v('equipment_rent')}" placeholder="0"></label>
-                    <label class="bxa-label">Товар<input class="bxa-input bxa-num" type="number" name="goods" value="${v('goods')}" placeholder="0"></label>
-                    <label class="bxa-label">Ремонт<input class="bxa-input bxa-num" type="number" name="repairs" value="${v('repairs')}" placeholder="0"></label>
-                    <label class="bxa-label">Консалтинг<input class="bxa-input bxa-num" type="number" name="consulting" value="${v('consulting')}" placeholder="0"></label>
-                    <label class="bxa-label">Оборудование<input class="bxa-input bxa-num" type="number" name="equipment" value="${v('equipment')}" placeholder="0"></label>
-                    <label class="bxa-label">Бух. услуги<input class="bxa-input bxa-num" type="number" name="buh_services" value="${v('buh_services')}" placeholder="0"></label>
-                </div>
-            </div>
-
-            <div class="bxa-form-section">
-                <div class="bxa-section-title">Налоги</div>
-                <div class="bxa-form-row">
-                    <label class="bxa-label">ИПН/КПН<input class="bxa-input bxa-num" type="number" name="ipn_kpn" value="${v('ipn_kpn')}" placeholder="0"></label>
-                    <label class="bxa-label">Нал. самозан.<input class="bxa-input bxa-num" type="number" name="self_employed_taxes" value="${v('self_employed_taxes')}" placeholder="0"></label>
-                    <label class="bxa-label">Расходы ИП<input class="bxa-input bxa-num" type="number" name="ip_expenses" value="${v('ip_expenses')}" placeholder="0"></label>
-                </div>
-            </div>
-
-            <div class="bxa-form-section">
-                <label class="bxa-label">Примечание
-                    <textarea class="bxa-input bxa-textarea" name="note" rows="2" placeholder="Доп. информация...">${entry ? escHtml(entry.note || '') : ''}</textarea>
-                </label>
             </div>
 
             <div class="bxa-result" id="formResult">
-                <div class="bxa-result-item"><span>Маржа партнёра</span><strong data-c="pMargin">—</strong></div>
-                <div class="bxa-result-item"><span>Маржа %</span><strong data-c="pct" class="">—</strong></div>
+                <div class="bxa-result-item"><span>Реализация без НДС</span><strong>${fmtMoney(deal.revenueNet)}</strong></div>
+                <div class="bxa-result-item bxa-result-total"><span>Маржинальность</span><strong data-c="pct">—</strong></div>
             </div>
 
             <div class="bxa-form-error" id="formError" hidden></div>
             <div class="bxa-form-btns">
                 <button type="button" id="cancelFormBtn" class="bxa-btn">Отмена</button>
                 <button type="submit" id="submitBtn" class="bxa-btn bxa-btn-primary">
-                    ${entry ? 'Сохранить изменения' : 'Сохранить в БД и Битрикс'}
+                    ${entry ? 'Сохранить изменения' : 'Сохранить'}
                 </button>
             </div>
-        </form>
-    `;
+        </form>`;
 }
 
-function renderPickerScreen() {
-    return `
-        <div class="bxa-picker">
-            <div class="bxa-picker-title">Выберите партнёра</div>
-            <select class="bxa-select" id="partnerSelect">
-                <option value="">— выберите —</option>
-                ${allPartners.map(p => `<option value="${escHtml(p.id)}">${escHtml(p.name)}</option>`).join('')}
+const COPY_FIELDS = ['fot_unofficial','curators','pieceworkers','ums','equipment_rent','transport','repairs','gen_cleaning','consulting','equipment'];
+
+async function renderCopyBar(container, dealId, partnerId, currentEntry) {
+    const bar = container.querySelector('#copyBar');
+    if (!bar) return;
+    try {
+        const data = await api('GET', `/api/bitrix-app/deal-history?deal_id=${encodeURIComponent(dealId)}&partner_id=${encodeURIComponent(partnerId)}`);
+        const history = (data.entries || []).filter(e => e.month_key !== selectedMonth);
+        if (!history.length) { bar.innerHTML = ''; return; }
+        bar.innerHTML = `
+            <span class="bxa-copy-label">Перенести из месяца:</span>
+            <select class="bxa-select bxa-select-sm" id="copyMonthSelect">
+                <option value="">— выбрать —</option>
+                ${history.map(e => `<option value="${escHtml(e.month_key)}">${escHtml(formatMonthLabel(e.month_key))}</option>`).join('')}
             </select>
-            <button class="bxa-btn bxa-btn-primary" id="partnerSelectBtn" disabled>Продолжить</button>
-        </div>
-    `;
+            <button type="button" class="bxa-btn bxa-btn-sm" id="copyMonthBtn" disabled>Перенести</button>`;
+        const sel = bar.querySelector('#copyMonthSelect');
+        const btn = bar.querySelector('#copyMonthBtn');
+        sel.addEventListener('change', () => { btn.disabled = !sel.value; });
+        btn.addEventListener('click', () => {
+            const src = history.find(e => e.month_key === sel.value);
+            if (!src) return;
+            const form = container.querySelector('#mgmtForm');
+            COPY_FIELDS.forEach(f => {
+                const input = form.querySelector(`[name="${f}"]`);
+                if (input) input.value = Number(src[f]) || '';
+            });
+            container.querySelectorAll('.bxa-num').forEach(el => el.dispatchEvent(new Event('input')));
+            showNotice(`Данные перенесены из ${formatMonthLabel(sel.value)}`);
+        });
+    } catch { bar.innerHTML = ''; }
 }
 
 // ——— Расчёт в форме ———
-function attachCalc(container) {
+function attachCalc(container, revenue) {
     const n = (name) => Number(container.querySelector(`[name="${name}"]`)?.value) || 0;
-    const setText = (attr, txt) => { const el = container.querySelector(`[data-c="${attr}"]`); if (el) el.textContent = txt; };
-    const fmt = (v) => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(v);
+    const pctEl = container.querySelector('[data-c="pct"]');
 
     function calc() {
         const c = calcTotals({
-            revenue_gross: n('revenue_gross'), vat: n('vat'),
-            fot_official: n('fot_official'), fot_unofficial: n('fot_unofficial'),
-            kaspi_jti: n('kaspi_jti'), curators: n('curators'), pieceworkers: n('pieceworkers'),
-            self_employed: n('self_employed'), payroll_taxes: n('payroll_taxes'), official_salary: n('official_salary'),
-            ums: n('ums'), ums_els: n('ums_els'), eco_line_ums: n('eco_line_ums'), gen_cleaning: n('gen_cleaning'),
-            advances: n('advances'), transport: n('transport'), equipment_rent: n('equipment_rent'),
-            goods: n('goods'), repairs: n('repairs'), consulting: n('consulting'),
-            equipment: n('equipment'), buh_services: n('buh_services'),
-            ipn_kpn: n('ipn_kpn'), self_employed_taxes: n('self_employed_taxes'), ip_expenses: n('ip_expenses')
-        });
-        setText('revNet', fmt(c.revNet));
-        setText('fotTotal', fmt(c.fotTotal));
-        setText('umsTotal', fmt(c.umsTotal));
-        setText('pMargin', fmt(c.pMargin));
-        const pctEl = container.querySelector('[data-c="pct"]');
+            fot_unofficial: n('fot_unofficial'),
+            curators: n('curators'), pieceworkers: n('pieceworkers'),
+            ums: n('ums'), equipment_rent: n('equipment_rent'), transport: n('transport'),
+            repairs: n('repairs'), gen_cleaning: n('gen_cleaning'),
+            consulting: n('consulting'), equipment: n('equipment')
+        }, revenue);
         if (pctEl) {
-            pctEl.textContent = c.pct !== null ? c.pct.toFixed(1) + '%' : '—';
-            pctEl.className = '';
-            if (c.pct !== null) pctEl.classList.add(c.pct < 12 ? 'is-good' : c.pct < 30 ? 'is-warn' : 'is-bad');
+            pctEl.textContent = c.marginPct !== null ? c.marginPct.toFixed(1) + '%' : '—';
+            pctEl.className = marginColorClass(c.marginPct !== null ? c.partnerMargin : null);
         }
-        container.querySelector('#formResult')?.classList.toggle('is-neg', c.pMargin < 0);
+        container.querySelector('#formResult')?.classList.toggle('is-neg', c.partnerMargin < 0);
     }
     container.querySelectorAll('.bxa-num').forEach(el => el.addEventListener('input', calc));
     calc();
@@ -351,35 +479,48 @@ function attachCalc(container) {
 
 // ——— Загрузка данных ———
 async function loadData() {
-    const [mysqlData, entriesData] = await Promise.all([
-        api('GET', `/api/bitrix-app/mysql-data?partner_id=${encodeURIComponent(currentPartner.id)}&month=${encodeURIComponent(selectedMonth)}`).catch(() => ({ rows: [] })),
+    const [dealsData, entriesData] = await Promise.all([
+        api('GET', `/api/bitrix-app/deals?partner_id=${encodeURIComponent(currentPartner.id)}&month=${encodeURIComponent(selectedMonth)}`).catch(() => ({ deals: [] })),
         api('GET', `/api/bitrix-app/entries?partner_id=${encodeURIComponent(currentPartner.id)}&month=${encodeURIComponent(selectedMonth)}`).catch(() => ({ entries: [] }))
     ]);
-    mysqlRows = Array.isArray(mysqlData.rows) ? mysqlData.rows : [];
+    deals = Array.isArray(dealsData.deals) ? dealsData.deals : [];
     entries = Array.isArray(entriesData.entries) ? entriesData.entries : [];
+    if (Array.isArray(dealsData.availableMonths) && dealsData.availableMonths.length) {
+        availableMonths = dealsData.availableMonths;
+        if (!availableMonths.includes(selectedMonth)) {
+            // Текущий (реальный) месяц не входит в реальные месяцы сделок — переключаемся
+            // на самый свежий доступный и перезапрашиваем данные именно под него,
+            // иначе селектор покажет новый месяц, а на экране останутся пустые данные от старого.
+            selectedMonth = availableMonths[0];
+            await loadData();
+        }
+    }
 }
 
 // ——— Рендер основного экрана ———
 function renderMain() {
     app.innerHTML = `
         ${renderMonthBar()}
-        <div id="formArea" hidden></div>
-        ${renderMysqlTable()}
-        <div id="entriesArea">${renderEntries()}</div>
+        <div id="formArea" class="bxa-form-area" hidden></div>
+        <div id="dealsArea">${renderDeals()}</div>
     `;
     bindMain();
 }
 
-function showForm(entry = null, mysql = null) {
+function openForm(dealId, entry = null) {
+    const deal = deals.find(d => String(d.id) === String(dealId));
+    if (!deal) return;
+    activeDealId = String(dealId);
     const fa = document.getElementById('formArea');
-    fa.innerHTML = renderForm(entry, mysql);
+    fa.innerHTML = renderForm(deal, entry);
     fa.hidden = false;
-    attachCalc(fa);
-    fa.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    attachCalc(fa, deal.revenueNet);
+    renderCopyBar(fa, dealId, currentPartner.id, entry);
 
-    fa.querySelector('#cancelFormBtn')?.addEventListener('click', () => {
-        fa.hidden = true; fa.innerHTML = ''; editingId = null; prefillMysql = null;
-    });
+    const close = () => { fa.hidden = true; fa.innerHTML = ''; editingId = null; activeDealId = null; };
+    fa.querySelector('#closeFormBtn')?.addEventListener('click', close);
+    fa.querySelector('#cancelFormBtn')?.addEventListener('click', close);
+
     fa.querySelector('#mgmtForm')?.addEventListener('submit', async (e) => {
         e.preventDefault();
         const btn = fa.querySelector('#submitBtn');
@@ -395,11 +536,10 @@ function showForm(entry = null, mysql = null) {
             } else {
                 entries = [result.entry, ...entries];
             }
-            editingId = null; prefillMysql = null;
+            editingId = null;
             fa.hidden = true; fa.innerHTML = '';
-            document.getElementById('entriesArea').innerHTML = renderEntries();
-            bindEntryActions();
-            // Показываем уведомление
+            document.getElementById('dealsArea').innerHTML = renderDeals();
+            bindDealActions();
             showNotice('Сохранено в БД и отправлено в Битрикс');
         } catch (err) {
             errEl.textContent = err.message || 'Ошибка при сохранении';
@@ -422,58 +562,89 @@ function showNotice(text) {
 function bindMain() {
     document.getElementById('monthSelect')?.addEventListener('change', async (e) => {
         selectedMonth = e.target.value;
+        selectedCompany = '';
         showLoading('Загрузка...');
         await loadData().catch(() => {});
         renderMain();
     });
-
-    document.getElementById('addBtn')?.addEventListener('click', () => {
-        editingId = null; prefillMysql = null;
-        showForm(null, null);
-    });
-
-    // Кнопки "Внести" из MySQL-таблицы
-    app.querySelectorAll('[data-prefill]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const id = btn.dataset.prefill;
-            const row = mysqlRows.find(r => String(r.external_id) === id);
-            if (!row) return;
-            prefillMysql = row;
-            showForm(null, row);
-        });
-    });
-
-    bindEntryActions();
+    bindDealActions();
 }
 
-function bindEntryActions() {
-    const area = document.getElementById('entriesArea');
+function bindDealActions() {
+    const area = document.getElementById('dealsArea');
     if (!area) return;
-    area.querySelectorAll('[data-edit]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const id = Number(btn.dataset.edit);
-            const entry = entries.find(e => Number(e.id) === id);
-            if (!entry) return;
-            editingId = id;
-            showForm(entry, null);
+    // Re-bind on every render — renderDeals() recreates the <select>, so the old listener would be lost otherwise
+    document.getElementById('companyFilter')?.addEventListener('change', (e) => {
+        selectedCompany = e.target.value;
+        document.getElementById('dealsArea').innerHTML = renderDeals();
+        bindDealActions();
+    });
+    area.querySelectorAll('[data-open-deal]').forEach(card => {
+        card.addEventListener('click', () => {
+            const dealId = card.dataset.openDeal;
+            const entry = entries.find(e => e.deal_id === dealId);
+            editingId = entry ? Number(entry.id) : null;
+            openForm(dealId, entry || null);
         });
     });
-    area.querySelectorAll('[data-delete]').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const id = Number(btn.dataset.delete);
-            if (!confirm('Удалить эту запись из БД?')) return;
-            btn.disabled = true;
+    document.getElementById('transferPrevMonthBtn')?.addEventListener('click', transferFromPreviousMonth);
+    bindTableInputs();
+}
+
+function shiftMonthKey(monthKey, delta) {
+    const [y, m] = monthKey.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// Переносит данные объектов с предыдущего месяца в текущий — сопоставление по названию
+// сделки (адресу), т.к. Bitrix каждый месяц создаёт новую сделку с новым ID для того же объекта.
+// Заполняет только пустые строки, уже внесённые в этом месяце данные не трогает.
+async function transferFromPreviousMonth() {
+    const btn = document.getElementById('transferPrevMonthBtn');
+    const prevMonth = shiftMonthKey(selectedMonth, -1);
+    if (btn) { btn.disabled = true; btn.textContent = 'Переносим...'; }
+    try {
+        const prevData = await api('GET', `/api/bitrix-app/entries?partner_id=${encodeURIComponent(currentPartner.id)}&month=${encodeURIComponent(prevMonth)}`);
+        const prevEntries = Array.isArray(prevData.entries) ? prevData.entries : [];
+        if (!prevEntries.length) {
+            showNotice(`Нет данных за ${formatMonthLabel(prevMonth)}`);
+            return;
+        }
+        const prevByAddress = new Map();
+        prevEntries.forEach(e => { if (e.address) prevByAddress.set(e.address, e); });
+
+        let transferred = 0;
+        for (const deal of deals) {
+            const existingEntry = entries.find(en => en.deal_id === String(deal.id));
+            if (existingEntry && TABLE_ROW_FIELDS.some(f => Number(existingEntry[f]))) continue; // уже заполнено — не трогаем
+            const prevEntry = prevByAddress.get(deal.title);
+            if (!prevEntry) continue;
+
+            const payload = { deal_id: String(deal.id), month_key: selectedMonth, address: deal.title };
+            TABLE_ROW_FIELDS.forEach(f => { payload[f] = Number(prevEntry[f]) || 0; });
+            PRESERVED_FIELDS.forEach(f => { payload[f] = Number(prevEntry[f]) || 0; });
+            if (existingEntry) payload.id = existingEntry.id;
+
             try {
-                await api('DELETE', `/api/bitrix-app/entries/${id}?partner_id=${encodeURIComponent(currentPartner.id)}`);
-                entries = entries.filter(e => Number(e.id) !== id);
-                document.getElementById('entriesArea').innerHTML = renderEntries();
-                bindEntryActions();
-            } catch (err) {
-                alert(err.message || 'Ошибка');
-                btn.disabled = false;
-            }
-        });
-    });
+                const result = await api('POST', `/api/bitrix-app/entries?partner_id=${encodeURIComponent(currentPartner.id)}`, payload);
+                if (existingEntry) {
+                    entries = entries.map(en => Number(en.id) === Number(existingEntry.id) ? result.entry : en);
+                } else {
+                    entries = [result.entry, ...entries];
+                }
+                transferred++;
+            } catch {}
+        }
+
+        document.getElementById('dealsArea').innerHTML = renderDeals();
+        bindDealActions();
+        showNotice(transferred ? `Перенесено объектов: ${transferred}` : `Нечего переносить — все объекты уже совпадают или заполнены`);
+    } catch (err) {
+        showNotice(err.message || 'Ошибка переноса');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '↺ Перенести данные с прошлого месяца'; }
+    }
 }
 
 function showLoading(text = 'Загрузка...') {
@@ -488,24 +659,38 @@ function showError(msg) {
 async function init() {
     showLoading('Авторизация...');
     try {
-        // Читаем параметры из URL (Bitrix передаёт их при открытии приложения)
+        let loginData;
         const params = new URLSearchParams(window.location.search);
         const bxAuth = params.get('AUTH_ID') || params.get('auth');
         const bxDomain = params.get('DOMAIN') || params.get('domain');
 
-        if (!bxAuth || !bxDomain) {
-            showError('Откройте это приложение из Битрикс24 (параметры AUTH_ID и DOMAIN обязательны).');
-            return;
+        if (bxAuth && bxDomain) {
+            loginData = await api('POST', '/api/bitrix-app/login', { auth: bxAuth, domain: bxDomain });
+            if (loginData.sessionToken) sessionToken = loginData.sessionToken;
+        } else if (sessionToken) {
+            loginData = await api('GET', '/api/bitrix-app/me');
+        } else {
+            const meRes = await fetch('/api/bitrix-app/me', { credentials: 'same-origin' });
+            if (!meRes.ok) {
+                showError('Откройте это приложение из Битрикс24.');
+                return;
+            }
+            loginData = await meRes.json();
         }
-
-        // Логинимся на нашем сервере
-        const loginData = await api('POST', '/api/bitrix-app/login', { auth: bxAuth, domain: bxDomain });
 
         if (loginData.partnerBitrixId) {
             currentPartner = { id: loginData.partnerBitrixId, name: loginData.partnerName || loginData.partnerBitrixId };
         } else if (loginData.allPartners?.length) {
             allPartners = loginData.allPartners;
-            app.innerHTML = renderPickerScreen();
+            app.innerHTML = `
+                <div class="bxa-picker">
+                    <div class="bxa-picker-title">Выберите партнёра</div>
+                    <select class="bxa-select" id="partnerSelect">
+                        <option value="">— выберите —</option>
+                        ${allPartners.map(p => `<option value="${escHtml(p.id)}">${escHtml(p.name)}</option>`).join('')}
+                    </select>
+                    <button class="bxa-btn bxa-btn-primary" id="partnerSelectBtn" disabled>Продолжить</button>
+                </div>`;
             document.getElementById('partnerSelect').addEventListener('change', (e) => {
                 document.getElementById('partnerSelectBtn').disabled = !e.target.value;
             });
@@ -520,14 +705,13 @@ async function init() {
             });
             return;
         } else {
-            showError('Не найден партнёр для вашего аккаунта Битрикс24. Обратитесь к администратору.');
+            showError('Не найден партнёр для вашего аккаунта. Обратитесь к администратору.');
             return;
         }
 
         showLoading('Загружаем данные...');
         await loadData();
         renderMain();
-
     } catch (err) {
         showError(err.message || 'Ошибка инициализации');
     }

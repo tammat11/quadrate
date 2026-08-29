@@ -22,8 +22,33 @@ const FIELDS = {
     AREA: 'UF_CRM_1707724024179',
     OPU_PASSED_COUNT: 'UF_CRM_127_1756291224885',
     OPU_AVERAGE_SUM: 'UF_CRM_KASJD12',
-    MGMT_SCORE: 'UF_CRM_127_MGMT_SCORE'
+    MGMT_SCORE: 'UF_CRM_127_MGMT_SCORE',
+    // "Адрес объекта инфо" — стабильная ссылка на объект (иблок 115), 100% заполнена в 69,
+    // ~88% в 81. Точная привязка замечания к объекту портфеля вместо сравнения по TITLE.
+    OBJECT_ADDRESS: 'UF_CRM_1743501476',
+    // "Тип отзыва/замечания" (мультиселект) — тяжесть замечания.
+    REMARK_TYPE: 'UF_CRM_1716804677915'
 };
+
+// Тяжесть по типу замечания (см. UF_CRM_1716804677915 / FIELDS.REMARK_TYPE).
+// Разметка подтверждена заказчиком: Критический=4, Высокий=3, Средний=2, Низкий=1, Плановый=0.
+// Если у замечания несколько типов сразу — веса суммируются (тоже подтверждено).
+const REMARK_TYPE_SEVERITY = {
+    '43449': 4, // Отсутствие ОПУ на объекте — Критический
+    '43437': 3, // Качество уборки — Высокий
+    '43433': 3, // Спец одежда и внешний вид — Высокий
+    '43441': 3, // Коммуникация куратор - клиент — Высокий
+    '44865': 3, // Коммуникация куратор - ОПУ — Высокий
+    '44911': 3, // Коммуникация ОПУ - клиент — Высокий
+    '43447': 3, // Несоответствие стандартов качества уборки — Высокий
+    '43435': 2, // УМС/РМ (хранение/эксплуатация) — Средний
+    '44863': 2, // Прочее — Средний (по умолчанию)
+    '43439': 1, // Инвентарь/оборудование (хранение/эксплуатация) — Низкий
+    '44867': 0  // Несоответствие плановым работам — Плановый (не штрафует)
+};
+// Штраф за тяжесть считается в тех же единицах, что штраф за просрочку (0.05/день) —
+// см. calculateRemarkPenalty. Один "балл тяжести" = SEVERITY_PENALTY_UNIT.
+const SEVERITY_PENALTY_UNIT = 0.05;
 
 const CATEGORY_REALIZATION_COPY = '79';
 const FOT_TRIGGER_STAGE_IDS = new Set(['C69:UC_966DTL', 'C79:UC_JK572B']);
@@ -63,7 +88,6 @@ const MANUAL_DISCIPLINE_LIMITS = {
     '2362009': { maxQ: 0.8, penaltyPercent: 20, label: 'Илиясов Р.' },
     '3370865': { maxQ: 0.6, penaltyPercent: 40, label: 'Туймебеков Б.' }
 };
-const REMARKS_RELIEF_MAX = 0.35;
 const CLOCKSTER_PARTNER_TO_USER = {
     '3421309': [566091],
     '2362011': [474121],
@@ -146,10 +170,101 @@ const LIST_CALLS_REF_IBLOCK_ID = 115;
 const LIST_115_PARTNER_PROP = 'PROPERTY_905';
 const ENTITY_CALLS = '1364';
 const ENTITY_OPU = '1254';
+// SPA "Оценка эффективности объекта" — аудит-чек-лист из 39 критериев (заменяет
+// прежнюю заглушку getAuditQ). Единственная категория — 479 "Общая воронка".
+const ENTITY_AUDIT_EVAL = '1398';
+const CATEGORY_AUDIT_EVAL = 479;
+const AUDIT_EVAL_FIELDS = {
+    OBJECT: 'ufCrm193Object',
+    PARTNER: 'ufCrm193Partner',
+    DATE: 'ufCrm193Date'
+};
 const CATEGORY_CALLS = 431;
 const CATEGORY_DISCIPLINE = 439;
 const CATEGORY_TRAINING = 311;
 const CATEGORY_MANAGEMENT = 441;
+
+// Аудит-чек-лист «Оценка эффективности объекта» — 39 критериев, 12 разделов, 75 баллов
+// максимум (см. шаблон «Оценка эффективности 1.xlsx»). В самом шаблоне нет формулы
+// перевода текстового ответа в баллы — раскладка ниже подтверждена заказчиком:
+//   • kind 'binary'  — да/нет, да = max, нет = 0
+//   • kind 'triple'  — 3 уровня, 0 / max/2 / max баллов по direction:
+//       'lowGood'  — низкая = max, средняя = max/2, высокая = 0
+//       'highGood' — обратный порядок
+//       'midGood'  — только для критерия 37: средняя = max, низкая/высокая = 0
+//   • kind 'scale5'  — значение шкалы 1..5 совпадает с баллом (макс. 5)
+// Значение "н.п." (не применимо) исключается и из числителя, и из знаменателя (заказчик
+// подтвердил — уменьшаем базу, а не занижаем оценку).
+const AUDIT_CRITERIA = [
+    { field: 'ufCrm_193_C01', max: 1, kind: 'binary', answers: { '152975': 1, '152977': 0 } },
+    { field: 'ufCrm_193_C02', max: 1, kind: 'binary', answers: { '152979': 1, '152981': 0 } },
+    { field: 'ufCrm_193_C03', max: 1, kind: 'binary', answers: { '152983': 1, '152985': 0 } },
+    { field: 'ufCrm_193_C04', max: 1, kind: 'binary', answers: { '152987': 1, '152989': 0 } },
+    { field: 'ufCrm_193_C05', max: 3, kind: 'triple', direction: 'lowGood', answers: { '152991': 3, '152993': 1.5, '152995': 0 } },
+    { field: 'ufCrm_193_C06', max: 1, kind: 'binary', answers: { '152997': 1, '152999': 0 } },
+    { field: 'ufCrm_193_C07', max: 3, kind: 'triple', direction: 'lowGood', answers: { '153001': 3, '153003': 1.5, '153005': 0 }, naValues: ['153007'] },
+    { field: 'ufCrm_193_C08', max: 3, kind: 'triple', direction: 'lowGood', answers: { '153009': 3, '153011': 1.5, '153013': 0 }, naValues: ['153015'] },
+    { field: 'ufCrm_193_C09', max: 1, kind: 'binary', answers: { '153017': 1, '153019': 0 }, naValues: ['153021'] },
+    { field: 'ufCrm_193_C10', max: 3, kind: 'triple', direction: 'lowGood', answers: { '153023': 3, '153025': 1.5, '153027': 0 } },
+    { field: 'ufCrm_193_C11', max: 1, kind: 'binary', answers: { '153029': 1, '153031': 0 } },
+    { field: 'ufCrm_193_C12', max: 1, kind: 'binary', answers: { '153033': 1, '153035': 0 } },
+    { field: 'ufCrm_193_C13', max: 1, kind: 'binary', answers: { '153037': 1, '153039': 0 } },
+    { field: 'ufCrm_193_C14', max: 1, kind: 'binary', answers: { '153041': 1, '153043': 0 } },
+    { field: 'ufCrm_193_C15', max: 3, kind: 'triple', direction: 'highGood', answers: { '153045': 0, '153047': 1.5, '153049': 3 } },
+    { field: 'ufCrm_193_C16', max: 1, kind: 'binary', answers: { '153051': 1, '153053': 0 } },
+    { field: 'ufCrm_193_C17', max: 1, kind: 'binary', answers: { '153055': 1, '153057': 0 }, naValues: ['153059'] },
+    { field: 'ufCrm_193_C18', max: 1, kind: 'binary', answers: { '153061': 1, '153063': 0 }, naValues: ['153065'] },
+    { field: 'ufCrm_193_C19', max: 5, kind: 'scale5', answers: { '153067': 1, '153069': 2, '153071': 3, '153073': 4, '153075': 5 } },
+    { field: 'ufCrm_193_C20', max: 5, kind: 'scale5', answers: { '153077': 1, '153079': 2, '153081': 3, '153083': 4, '153085': 5 } },
+    { field: 'ufCrm_193_C21', max: 5, kind: 'scale5', answers: { '153087': 1, '153089': 2, '153091': 3, '153093': 4, '153095': 5 } },
+    { field: 'ufCrm_193_C22', max: 5, kind: 'scale5', answers: { '153097': 1, '153099': 2, '153101': 3, '153103': 4, '153105': 5 } },
+    { field: 'ufCrm_193_C23', max: 5, kind: 'scale5', answers: { '153107': 1, '153109': 2, '153111': 3, '153113': 4, '153115': 5 } },
+    { field: 'ufCrm_193_C24', max: 3, kind: 'triple', direction: 'highGood', answers: { '153117': 0, '153119': 1.5, '153121': 3 } },
+    { field: 'ufCrm_193_C25', max: 1, kind: 'binary', answers: { '153123': 1, '153125': 0 } },
+    { field: 'ufCrm_193_C26', max: 1, kind: 'binary', answers: { '153127': 1, '153129': 0 }, naValues: ['153131'] },
+    { field: 'ufCrm_193_C27', max: 1, kind: 'binary', answers: { '153133': 1, '153135': 0 }, naValues: ['153137'] },
+    { field: 'ufCrm_193_C28', max: 1, kind: 'binary', answers: { '153139': 1, '153141': 0 }, naValues: ['153143'] },
+    { field: 'ufCrm_193_C29', max: 1, kind: 'binary', answers: { '153145': 1, '153147': 0 } },
+    { field: 'ufCrm_193_C30', max: 1, kind: 'binary', answers: { '153149': 1, '153151': 0 } },
+    { field: 'ufCrm_193_C31', max: 1, kind: 'binary', answers: { '153153': 1, '153155': 0 } },
+    { field: 'ufCrm_193_C32', max: 1, kind: 'binary', answers: { '153157': 1, '153159': 0 } },
+    { field: 'ufCrm_193_C33', max: 1, kind: 'binary', answers: { '153161': 1, '153163': 0 } },
+    { field: 'ufCrm_193_C34', max: 1, kind: 'binary', answers: { '153165': 1, '153167': 0 } },
+    { field: 'ufCrm_193_C35', max: 1, kind: 'binary', answers: { '153169': 1, '153171': 0 } },
+    { field: 'ufCrm_193_C36', max: 1, kind: 'binary', answers: { '153173': 1, '153175': 0 } },
+    // №37 «Рабочая нагрузка оператора» — единственный критерий с пиком по центру
+    // (подтверждено заказчиком): средняя нагрузка лучше всего, оба края — 0.
+    { field: 'ufCrm_193_C37', max: 3, kind: 'triple', direction: 'midGood', answers: { '153177': 0, '153179': 3, '153181': 0 } },
+    { field: 'ufCrm_193_C38', max: 1, kind: 'binary', answers: { '153183': 1, '153185': 0 } },
+    { field: 'ufCrm_193_C39', max: 3, kind: 'triple', direction: 'highGood', answers: { '153187': 0, '153189': 1.5, '153191': 3 }, naValues: ['153193'] }
+];
+const AUDIT_CRITERIA_MAX_TOTAL = AUDIT_CRITERIA.reduce((sum, c) => sum + c.max, 0); // 75
+
+// Считает % эффективности одного аудита (SPA 1398) по 39 критериям. Критерии без ответа
+// или отмеченные "н.п." исключаются из знаменателя (не искажают итог). Возвращает null,
+// если ни один критерий не отвечен (пустой черновик) — такую запись не учитываем вообще.
+function computeAuditItemScore(item) {
+    let achieved = 0;
+    let maxApplicable = 0;
+    let answeredCount = 0;
+
+    for (const criterion of AUDIT_CRITERIA) {
+        const rawValue = getFieldValue(item, criterion.field);
+        if (rawValue == null || rawValue === '') continue;
+        const key = String(Array.isArray(rawValue) ? rawValue[0] : rawValue).trim();
+        if (criterion.naValues && criterion.naValues.includes(key)) continue; // "н.п." — исключить
+
+        const points = criterion.answers[key];
+        if (!Number.isFinite(points)) continue; // неизвестное/нераспознанное значение — пропускаем
+
+        achieved += points;
+        maxApplicable += criterion.max;
+        answeredCount += 1;
+    }
+
+    if (answeredCount === 0) return null;
+    return { achieved, maxApplicable, answeredCount, efficiency: maxApplicable > 0 ? achieved / maxApplicable : 0 };
+}
 const REPORTING_MONTH_START = '2026-03';
 const REPORTING_MONTH_END = '2027-03';
 const SUMMARY_FILTER_VALUE = 'summary';
@@ -158,26 +273,32 @@ const AUDIT_REMARK_SOURCE_LABELS = new Set(['от аудитора замеча�
 const NEGATIVE_REMARK_SOURCE_IDS = new Set(['43609', '43607', '43735', '43709', '151243']);
 const NEGATIVE_REMARK_LABEL_PARTS = ['замечание'];
 const POSITIVE_REMARK_SOURCE_IDS = new Set(['43713', '43711', '43715']);
-const POSITIVE_REMARK_LABEL_PARTS = ['положительный отзыв'];
-const AUDIT_NEGATIVE_DEAL_PENALTY = 0;
+const POSITIVE_REMARK_SOURCE_LABEL_PARTS = ['положительный отзыв'];
 
+// Матрица «Квадрат мечты» (март 2026 — март 2027). Веса/влияние — из
+// «Матрица оценки партнера.docx». Показатели без реального источника данных
+// (rounds/training/budget) временно считаются через Q=1.0-заглушку — см.
+// соответствующие get*Q функции ниже. Аудит (audit) уже реальный — SPA 1398.
 const MATRIX = {
-    relations: [
-        { key: 'calls', influence: 3, weight: 4 },
-        { key: 'remarks', influence: 2, weight: 4 },
-        { key: 'audit', influence: 2, weight: 5 },
-    ],
-    money: [
-        { key: 'realization', influence: 2, weight: 6 },
-        { key: 'upravlenka', influence: 3, weight: 6 },
-    ],
     operations: [
-        { key: 'clockster', influence: 3, weight: 6 },
-        { key: 'training', influence: 1, weight: 8 },
-        { key: 'discipline', influence: 3, weight: 3 },
-        { key: 'umsrm', influence: 3, weight: 2 },
+        { key: 'clockster', influence: 3, weight: 4 },  // Регистрация/отметка, макс 12
+        { key: 'rounds', influence: 3, weight: 2 },      // Объезды партнёров и кураторов, макс 6
+        { key: 'training', influence: 2, weight: 6 },    // Обучение операторов, макс 12
+    ],
+    finance: [
+        { key: 'budget', influence: 3, weight: 7 },      // Бюджетная дисциплина, макс 21
+        { key: 'ums', influence: 3, weight: 3 },         // % УМС от дохода клиента, макс 9
+    ],
+    relations: [
+        { key: 'calls', influence: 2, weight: 5 },       // Обзвон клиентов (CSAT), макс 10
+        { key: 'audit', influence: 2, weight: 5 },       // Аудит качества, макс 10
+        { key: 'remarks', influence: 3, weight: 8 },     // Замечания, макс 24
+        { key: 'cleanShare', influence: 2, weight: 4 },  // Доля объектов без замечаний, макс 8
     ]
 };
+const POSITIVE_REVIEW_BONUS_MAX = 5;
+const UMS_TARGET_PERCENT = 0.08;
+const UMS_TOLERANCE_PERCENT = 0.10;
 
 const OPU_COMPLEXITY_SOURCE = [
     { value: 93, aliases: ['Абдуахат Болатбек', 'Болатбек А.'] },
@@ -209,10 +330,35 @@ const OPU_COMPLEXITY_SOURCE = [
     { value: 76, aliases: ['Юлия Айтуганова', 'Айтуганова Ю.'] }
 ];
 
-const HIDDEN_COMPLEXITY_BOOSTS = {
-    '2362025': { area: 0.05, opu: 0.05, account: 0.03 }, // Мусаева Р.
-    '2362027': { area: 0.05, opu: 0.05 }  // Нысанбеков Е.
-};
+// Основной город партнёра — для правила лиги «город=Алматы → не ниже Изумруда»
+// (Вариант 1 из «Классификация партнера.xlsx»). Партнёры вне списка — city=null,
+// правило просто не срабатывает, но остальной расчёт лиги не ломается.
+const PARTNER_CITY_SOURCE = [
+    { city: 'Атырау', aliases: ['Ли А.'] },
+    { city: 'Усть-Каменогорск', aliases: ['Айткулова А.', 'Айжан Алматы Айткулова'] },
+    { city: 'Алматы', aliases: ['Оспанова Г', 'Гульмира Оспанова'] },
+    { city: 'Астана', aliases: ['Бут Р.', 'Римма Бут'] },
+    { city: 'Павлодар', aliases: ['Жапабаева Б.'] },
+    { city: 'Караганда', aliases: ['Жандос Альсейтов'] },
+    { city: 'Шымкент', aliases: ['Токенова С.', 'Сара Токенова', 'Токенова Сара'] },
+    { city: 'Алматы', aliases: ['Роза Ерасылова', 'Роза Алматы Ерасылова'] },
+    { city: 'Алматы', aliases: ['Болатбек А.', 'Абдуахат Болатбек'] },
+    { city: 'Алматы', aliases: ['Калиаскар Б.', 'Бакытгул Калиаскар'] },
+    { city: 'Алматы', aliases: ['Илиясов Р.', 'Рашид Илиясов'] },
+    { city: 'Алматы', aliases: ['Рузиева Зоя', 'Зоя Рузиева'] },
+    { city: 'Алматы', aliases: ['Нысанбеков Е.', 'Ербол Алматы Нысанбеков'] },
+    { city: 'Астана', aliases: ['Полоз О.', 'Ольга Астана Полоз'] },
+    { city: 'Алматы', aliases: ['Мусаева Р.', 'Рабинур Алматы Мусаева'] },
+    { city: 'Алматы', aliases: ['Назарова М.', 'Мукарям Назарова'] },
+    { city: 'Алматы', aliases: ['Куатова М.', 'Мухаббат Алматы Куатова'] },
+    { city: 'Алматы', aliases: ['Аубакирова А.', 'Ания Аубакирова'] },
+    { city: 'Актобе', aliases: ['Айтуганова Ю.', 'Юлия Айтуганова'] },
+    { city: 'Тараз', aliases: ['Кан Т.', 'Татьяна Кан'] },
+    { city: 'Кокшетау', aliases: ['Исмагамбетов М', 'Марат Исмагамбетов'] },
+    { city: 'Кызылорда', aliases: ['Черней Т.', 'Татьяна Черней'] },
+    { city: 'Талдыкорган', aliases: ['Омельченко С.'] },
+    { city: 'Туркестан', aliases: ['Кабиева А.', 'Айгерим Кабиева'] }
+];
 
 const CACHE_KEY = 'dashboardCacheV5';
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 часа
@@ -225,6 +371,7 @@ let callsItems = [];
 let disciplineItems = [];
 let opuItems = [];
 let managementItems = [];
+let auditEvalItems = [];
 let fotDbItems = [];
 let managementRowsByPartner = {};
 let managementSummaryByPartner = {};
@@ -238,6 +385,7 @@ let accountCoefficientRows = [];
 let accountCoefficientLookup = {};
 let callsByPartner = {};   // индекс: partnerId -> [items]
 let opuByPartner = {};     // индекс: partnerId -> [items]
+let auditEvalByPartner = {}; // индекс: partnerId -> [{achieved, maxApplicable, answeredCount, efficiency}]
 let fotTriggerDealsByPartner = {};
 let lastUserMap = {};
 let clocksterMetricsByPartner = {};
@@ -248,20 +396,15 @@ let remarkMetricsByPartner = {};
 let auditCountsByPartner = {};
 let accountCoeffStatsByPartner = {};
 let opuComplexityStatsByPartner = {};
-let remarksReliefBenchmark = null;
 let bitrixPortalBase = '';
-let complexityBenchmarks = {
-    objects: null,
-    area: null,
-    opu: null
-};
+let leagueAggregates = { rows: [], totals: {}, partnerCount: 0 };
 let fotDbStatsByPartnerMonth = {};
 let fotDbPartnerLookup = {};
 let fotContractsByPartnerMonth = {};
 let selectedExamplePartnerId = '';
 let expandedMatrixGroups = {
     relations: false,
-    money: false,
+    finance: false,
     operations: false
 };
 let lastRenderedTimestamp = 0;
@@ -272,33 +415,33 @@ const MATRIX_GROUP_CONFIG = [
         id: 'operations',
         label: 'Операционка',
         scoreField: 'operationsScore',
-        sub: '4 крит.',
+        sub: '3 крит. · 30',
         items: [
-            { key: 'clockster', label: 'Клостер' },
-            { key: 'training', label: 'Обучение' },
-            { key: 'discipline', label: 'Дисциплины' },
-            { key: 'umsrm', label: 'УМС/РМ' }
+            { key: 'clockster', label: 'Регистрация/отметка' },
+            { key: 'rounds', label: 'Объезды' },
+            { key: 'training', label: 'Обучение' }
         ]
     },
     {
-        id: 'money',
-        label: 'Деньги',
-        scoreField: 'moneyScore',
-        sub: '2 крит.',
+        id: 'finance',
+        label: 'Финансы',
+        scoreField: 'financeScore',
+        sub: '2 крит. · 30',
         items: [
-            { key: 'realization', label: 'ФОТ' },
-            { key: 'upravlenka', label: 'Управленка' }
+            { key: 'budget', label: 'Бюджетная дисциплина' },
+            { key: 'ums', label: '% УМС' }
         ]
     },
     {
         id: 'relations',
         label: 'Отношения',
         scoreField: 'relationsScore',
-        sub: '3 крит.',
+        sub: '4 крит. · 52',
         items: [
-            { key: 'calls', label: 'Обзвон' },
+            { key: 'calls', label: 'Обзвон (CSAT)' },
+            { key: 'audit', label: 'Аудит' },
             { key: 'remarks', label: 'Замечания' },
-            { key: 'audit', label: 'Аудит' }
+            { key: 'cleanShare', label: 'Без замечаний' }
         ]
     }
 ];
@@ -331,7 +474,6 @@ function buildOpuComplexityStats() {
         };
     }
 
-    complexityBenchmarks.opu = buildComplexityBenchmark(OPU_COMPLEXITY_SOURCE.map(item => Number(item.value) || 0));
 }
 
 function normalizeAccountLookupText(value) {
@@ -599,6 +741,11 @@ function extractTrainingMonthKey(item) {
             .map(raw => raw ? new Date(raw) : null)
             .find(date => date && !Number.isNaN(date.getTime()));
 
+        if (referenceDate) {
+            let year = referenceDate.getFullYear();
+            const referenceMonth = referenceDate.getMonth() + 1;
+
+            // Если запись создана/обновлена на стыке года, подгоняем год под номер месяца.
             if (monthNumber - referenceMonth >= 6) {
                 year -= 1;
             } else if (referenceMonth - monthNumber >= 6) {
@@ -642,8 +789,8 @@ function getFilteredRemarkDeals() {
 }
 
 // ——— Select-поля для разных воронок ———
-const SELECT_DEALS = ['ID', 'CATEGORY_ID', 'STAGE_ID', 'COMPANY_ID', 'CONTACT_ID', 'UF_CRM_ACTIVE_ADDRESS', FIELDS.PARTNER, 'ASSIGNED_BY_ID', 'MOVED_TIME', 'CLOSEDATE', 'DATE_CREATE', 'OPPORTUNITY', FIELDS.AREA, FIELDS.MONTH_ACCRUAL];
-const SELECT_REMARKS = ['ID', 'TITLE', FIELDS.PARTNER, 'ASSIGNED_BY_ID', 'DATE_CREATE', FIELDS.REMARK_DATE, FIELDS.FEEDBACK_DATE, FIELDS.REMARK_SOURCE];
+const SELECT_DEALS = ['ID', 'CATEGORY_ID', 'STAGE_ID', 'COMPANY_ID', 'CONTACT_ID', 'UF_CRM_ACTIVE_ADDRESS', FIELDS.PARTNER, 'ASSIGNED_BY_ID', 'MOVED_TIME', 'CLOSEDATE', 'DATE_CREATE', 'OPPORTUNITY', FIELDS.AREA, FIELDS.MONTH_ACCRUAL, FIELDS.OBJECT_ADDRESS];
+const SELECT_REMARKS = ['ID', 'TITLE', FIELDS.PARTNER, 'ASSIGNED_BY_ID', 'DATE_CREATE', FIELDS.REMARK_DATE, FIELDS.FEEDBACK_DATE, FIELDS.REMARK_SOURCE, FIELDS.OBJECT_ADDRESS, FIELDS.REMARK_TYPE];
 
 // ——— Хелперы расчётов ———
 
@@ -699,7 +846,7 @@ function isPositiveRemarkSource(value) {
     const rawString = String(raw).trim();
     const normalized = rawString.toLowerCase();
     return POSITIVE_REMARK_SOURCE_IDS.has(rawString)
-        || POSITIVE_REMARK_LABEL_PARTS.some(part => normalized.includes(part));
+        || POSITIVE_REMARK_SOURCE_LABEL_PARTS.some(part => normalized.includes(part));
 }
 
 function isNegativeRemarkSource(value) {
@@ -712,17 +859,23 @@ function isNegativeRemarkSource(value) {
         || NEGATIVE_REMARK_LABEL_PARTS.some(part => normalized.includes(part));
 }
 
+// Тяжесть замечания по полю "Тип отзыва/замечания" (мультиселект) — сумма весов всех
+// отмеченных типов (подтверждено заказчиком). Если поле совсем пустое — 0 (штрафуем только
+// за просрочку, как раньше, не выдумываем тяжесть там, где её не проставили).
+function getRemarkSeverityWeight(typeValue) {
+    const rawList = Array.isArray(typeValue) ? typeValue : (typeValue == null || typeValue === '' ? [] : [typeValue]);
+    if (rawList.length === 0) return 0;
+    return rawList.reduce((sum, id) => {
+        const key = String(id).trim();
+        const weight = REMARK_TYPE_SEVERITY[key];
+        return sum + (Number.isFinite(weight) ? weight : REMARK_TYPE_SEVERITY['44863']); // неизвестный тип → как "Прочее"
+    }, 0);
+}
+
 function buildRemarkMetrics(selectedMonth) {
     const metrics = {};
 
-    for (const deal of remarkDeals) {
-        const reportMonth = getRemarkReportMonth(deal);
-        if (!doesMonthMatchSelection(reportMonth, selectedMonth)) continue;
-        if (!isNegativeRemarkSource(getFieldValue(deal, FIELDS.REMARK_SOURCE))) continue;
-
-        const pid = normalizePartnerId(deal);
-        if (pid === '__no_partner__') continue;
-
+    function ensurePartner(pid) {
         if (!metrics[pid]) {
             metrics[pid] = {
                 rowCount: 0,
@@ -732,38 +885,69 @@ function buildRemarkMetrics(selectedMonth) {
                 auditDealsCount: 0,
                 totalLateDays: 0,
                 totalPenalty: 0,
+                positiveCount: 0,
+                negativeCount: 0,
+                objectsWithNegativeRemark: new Set(),
                 items: []
             };
         }
+        return metrics[pid];
+    }
 
+    for (const deal of remarkDeals) {
+        const reportMonth = getRemarkReportMonth(deal);
+        if (!doesMonthMatchSelection(reportMonth, selectedMonth)) continue;
+
+        const pid = normalizePartnerId(deal);
+        if (pid === '__no_partner__') continue;
+
+        const sourceValue = getFieldValue(deal, FIELDS.REMARK_SOURCE);
+
+        // Положительные отзывы не штрафуют, но нужны для бонуса «Голос клиента».
+        if (isPositiveRemarkSource(sourceValue)) {
+            ensurePartner(pid).positiveCount += 1;
+            continue;
+        }
+        if (!isNegativeRemarkSource(sourceValue)) continue;
+
+        const m = ensurePartner(pid);
         const remarkDate = normalizeScalar(getFieldValue(deal, FIELDS.REMARK_DATE));
         const feedbackDate = normalizeScalar(getFieldValue(deal, FIELDS.FEEDBACK_DATE));
         const lateDays = calculateRemarkLateDays(remarkDate, feedbackDate);
-        const penalty = lateDays == null ? 0 : lateDays * 0.05;
-        const sourceValue = getFieldValue(deal, FIELDS.REMARK_SOURCE);
+        const latePenalty = lateDays == null ? 0 : lateDays * 0.05;
+        const severityWeight = getRemarkSeverityWeight(getFieldValue(deal, FIELDS.REMARK_TYPE));
+        const penalty = latePenalty + severityWeight * SEVERITY_PENALTY_UNIT;
+        // Ключ объекта — "Адрес объекта инфо" (UF_CRM_1743501476), а не TITLE: та же ссылка,
+        // что и на объекте в воронке 69, только так cleanShare сможет сверить "грязные"
+        // объекты с реальным активным портфелем партнёра (см. processData).
+        const objectAddressKey = normalizeScalar(getFieldValue(deal, FIELDS.OBJECT_ADDRESS));
 
-        metrics[pid].rowCount += 1;
+        m.rowCount += 1;
+        m.negativeCount += 1;
+        if (objectAddressKey) m.objectsWithNegativeRemark.add(objectAddressKey);
         if (isAuditRemarkSource(sourceValue)) {
-            metrics[pid].auditDealsCount += 1;
+            m.auditDealsCount += 1;
         }
         if (!remarkDate) {
-            metrics[pid].skippedMissingRemarkDate += 1;
+            m.skippedMissingRemarkDate += 1;
         } else if (!feedbackDate) {
-            metrics[pid].skippedMissingFeedbackDate += 1;
+            m.skippedMissingFeedbackDate += 1;
         } else if (lateDays == null) {
-            metrics[pid].skippedMissingRemarkDate += 1;
+            m.skippedMissingRemarkDate += 1;
         } else {
-            metrics[pid].scoredCount += 1;
-            metrics[pid].totalLateDays += lateDays;
-            metrics[pid].totalPenalty += penalty;
+            m.scoredCount += 1;
+            m.totalLateDays += lateDays;
+            m.totalPenalty += penalty;
         }
 
-        metrics[pid].items.push({
+        m.items.push({
             id: getFieldValue(deal, 'ID') ?? deal?.id,
             title: normalizeScalar(getFieldValue(deal, 'TITLE')) || '',
+            objectAddressKey,
             remarkDate,
             feedbackDate,
             lateDays,
+            severityWeight,
             penalty
         });
     }
@@ -1883,11 +2067,6 @@ function buildIndexes() {
     const managementMonth = getManagementMonthForSelection(selectedMonth);
     const callsMonths = getCallsReportMonths(selectedMonth);
     remarkMetricsByPartner = buildRemarkMetrics(selectedMonth);
-    remarksReliefBenchmark = buildComplexityBenchmark(
-        Object.values(remarkMetricsByPartner)
-            .map(metric => Number(metric?.rowCount) || 0)
-            .filter(value => value > 0)
-    );
     auditCountsByPartner = buildAuditCounts(selectedMonth);
     buildOpuComplexityStats();
     buildAccountCoeffStats();
@@ -1913,6 +2092,18 @@ function buildIndexes() {
         if (!pid) continue;
         if (!opuByPartner[pid]) opuByPartner[pid] = [];
         opuByPartner[pid].push(item);
+    }
+
+    auditEvalByPartner = {};
+    for (const item of auditEvalItems) {
+        const itemMonth = normalizeMonthKeyValue(getFieldValue(item, AUDIT_EVAL_FIELDS.DATE));
+        if (!doesMonthMatchSelection(itemMonth, selectedMonth)) continue;
+        const pid = normalizePartnerRef(getFieldValue(item, AUDIT_EVAL_FIELDS.PARTNER));
+        if (!pid) continue;
+        const score = computeAuditItemScore(item);
+        if (!score) continue; // пустой черновик — не учитываем
+        if (!auditEvalByPartner[pid]) auditEvalByPartner[pid] = [];
+        auditEvalByPartner[pid].push(score);
     }
 
     fotTriggerDealsByPartner = {};
@@ -2017,6 +2208,7 @@ function buildIndexes() {
                 revenueNetSum: 0,
                 partnerMarginSum: 0,
                 expenseIpSum: 0,
+                umsTotalSum: 0,
                 weightedMarginRows: 0,
                 latestMonthKey: itemMonth || ''
             };
@@ -2029,6 +2221,7 @@ function buildIndexes() {
         summary.revenueNetSum += normalizedRow.revenueNet;
         summary.partnerMarginSum += normalizedRow.partnerMargin;
         summary.expenseIpSum += normalizedRow.expenseIp;
+        summary.umsTotalSum += normalizedRow.umsTotal;
         if (normalizedRow.hasWeightedMarginFields) summary.weightedMarginRows += 1;
         if (itemMonth && String(itemMonth) > String(summary.latestMonthKey || '')) {
             summary.latestMonthKey = itemMonth;
@@ -2075,7 +2268,8 @@ function processData() {
                 name: partnerMap[pid],
                 dealsCount: 0, totalScore: 0, remarksCount: 0,
                 totalOpportunity: 0, totalArea: 0,
-                dealIds: [], realizationScores: [], remarkScores: [], remarkLateDaysTotal: 0, remarkMissingDateCount: 0, remarkMissingFeedbackCount: 0, history: []
+                dealIds: [], realizationScores: [], remarkScores: [], remarkLateDaysTotal: 0, remarkMissingDateCount: 0, remarkMissingFeedbackCount: 0, history: [],
+                objectAddressKeys: new Set()
             };
         }
         const p = partnersData[pid];
@@ -2086,17 +2280,30 @@ function processData() {
         p.totalScore += 1.0;
         p.dealIds.push(deal.ID);
         p.history.push({ date: deal.DATE_CREATE, score: 1.0 });
+        // "Действующие" объекты — это всё, что сейчас в 69 (см. FIELDS.OBJECT_ADDRESS).
+        const addressKey = normalizeScalar(getFieldValue(deal, FIELDS.OBJECT_ADDRESS));
+        if (addressKey) p.objectAddressKeys.add(addressKey);
     }
 
     for (const [pid, metric] of Object.entries(remarkMetricsByPartner)) {
         if (!partnersData[pid]) continue;
-        partnersData[pid].remarksCount = metric.rowCount;
-        partnersData[pid].remarkScores = metric.items
+        const p = partnersData[pid];
+        p.remarksCount = metric.rowCount;
+        p.remarkScores = metric.items
             .map(item => item.penalty)
             .filter(penalty => Number.isFinite(penalty) && penalty > 0);
-        partnersData[pid].remarkLateDaysTotal = metric.totalLateDays;
-        partnersData[pid].remarkMissingDateCount = metric.skippedMissingRemarkDate;
-        partnersData[pid].remarkMissingFeedbackCount = metric.skippedMissingFeedbackDate;
+        p.remarkLateDaysTotal = metric.totalLateDays;
+        p.remarkMissingDateCount = metric.skippedMissingRemarkDate;
+        p.remarkMissingFeedbackCount = metric.skippedMissingFeedbackDate;
+        p.positiveReviewCount = metric.positiveCount || 0;
+        p.negativeReviewCount = metric.negativeCount || 0;
+        // "Грязный" объект засчитываем, только если он реально есть в активном портфеле
+        // партнёра (воронка 69) — замечания на объектах, которые уже выбыли из портфеля,
+        // на долю "без замечаний" не влияют.
+        const dirtyInPortfolio = metric.objectsWithNegativeRemark
+            ? [...metric.objectsWithNegativeRemark].filter(key => p.objectAddressKeys.has(key))
+            : [];
+        p.objectsWithNegativeRemarkCount = dirtyInPortfolio.length;
     }
 
     if (partnerMap) {
@@ -2106,13 +2313,14 @@ function processData() {
                     name: partnerMap[id],
                     dealsCount: 0, totalScore: 0, remarksCount: 0,
                     totalOpportunity: 0, totalArea: 0,
-                    dealIds: [], realizationScores: [], remarkScores: [], remarkLateDaysTotal: 0, remarkMissingDateCount: 0, remarkMissingFeedbackCount: 0, history: []
+                    dealIds: [], realizationScores: [], remarkScores: [], remarkLateDaysTotal: 0, remarkMissingDateCount: 0, remarkMissingFeedbackCount: 0, history: [],
+                    objectAddressKeys: new Set()
                 };
             }
         }
     }
 
-    buildComplexityBenchmarks();
+    buildLeagueAggregates();
 }
 
 // ——— Q-функции (используют индексы) ———
@@ -2141,8 +2349,21 @@ function getRemarksQ(pid) {
     const p = partnersData[pid];
     if (!p || p.remarkScores.length === 0) return 1.0;
     const totalPenalty = p.remarkScores.reduce((sum, penalty) => sum + penalty, 0);
-    const reliefFactor = getRemarksReliefFactor(pid);
-    return Math.max(0, Math.min(1, 1 - (totalPenalty / reliefFactor)));
+    const penaltyPerObject = getRemarksPenaltyPerObject(pid);
+    void totalPenalty; // штраф уже учтён внутри penaltyPerObject, оставлено для читаемости
+    return Math.max(0, Math.min(1, 1 - penaltyPerObject));
+}
+
+// Штраф за замечания, нормированный на реальный портфель партнёра
+// (замена «фактора снисхождения» по объёму — см. план перехода на матрицу
+// «Квадрат мечты»). Как только появится поле тяжести замечания, сюда же
+// добавится взвешивание крит./средн./незнач.
+function getRemarksPenaltyPerObject(pid) {
+    const p = partnersData[pid];
+    if (!p || !p.remarkScores || p.remarkScores.length === 0) return 0;
+    const totalPenalty = p.remarkScores.reduce((sum, penalty) => sum + penalty, 0);
+    const portfolio = Math.max(1, Number(p.dealsCount) || 0);
+    return totalPenalty / portfolio;
 }
 
 function getRealizationQ(pid) {
@@ -2166,19 +2387,13 @@ function findNumericField(item, patterns) {
     return null;
 }
 
-function getTrainingQ(pid) {
-    const items = opuByPartner[pid];
-    if (!items || items.length === 0) return 0.4;
-    let total = 0;
-    let count = 0;
-    for (const i of items) {
-        const avgSum = parseFloat(getFieldValue(i, FIELDS.OPU_AVERAGE_SUM));
-        if (Number.isNaN(avgSum)) continue;
-        total += avgSum;
-        count++;
-    }
-    if (count === 0) return 0.4;
-    return Math.min(1, (total / count) / 10);
+// Новая методика считает «Обучение операторов» как % обученных от общего
+// штата партнёра — этого знаменателя в коде пока нет (источник подключим
+// отдельно). До тех пор — нейтральная заглушка Q=1.0. Старая формула
+// (средний балл SPA-элемента / 10) была под прежнюю методику и здесь больше
+// не используется.
+function getTrainingQ(_pid) {
+    return 1.0;
 }
 
 function getTrainingPassedCount(item) {
@@ -2213,10 +2428,59 @@ function getDisciplineQ(pid) {
     return Math.min(baseQ, manualRule.maxQ);
 }
 
+// Аудит качества — SPA 1398 "Оценка эффективности объекта" (39 критериев, см.
+// AUDIT_CRITERIA/computeAuditItemScore). Q = средний % эффективности по всем аудитам
+// партнёра за период. Пока партнёра ни разу не аудировали — нейтрально (не штрафует).
 function getAuditQ(pid) {
-    void pid;
-    return 0;
+    const items = auditEvalByPartner[String(pid)];
+    if (!items || items.length === 0) return 1.0;
+    const avg = items.reduce((sum, s) => sum + s.efficiency, 0) / items.length;
+    return Math.max(0, Math.min(1, avg));
 }
+
+// Объезды партнёров и кураторов — источник появится с отдельным приложением.
+function getRoundsQ(pid) {
+    void pid;
+    return 1.0;
+}
+
+// Бюджетная дисциплина (план/факт, допуск ≤10%) — плановых цифр в управленке
+// (кат. 441) сейчас нет вообще, только факт. Нейтральная заглушка до появления
+// источника плана.
+function getBudgetQ(pid) {
+    void pid;
+    return 1.0;
+}
+
+// % УМС от дохода клиента: норматив 8%, допуск ±10% симметрично.
+function getUmsPercentQ(pid) {
+    const summary = managementSummaryByPartner[String(pid)];
+    if (!summary || !summary.revenueNetSum) return 1.0;
+    const factPct = summary.umsTotalSum / summary.revenueNetSum;
+    if (!Number.isFinite(factPct)) return 1.0;
+    const deviation = Math.abs(factPct - UMS_TARGET_PERCENT) / UMS_TOLERANCE_PERCENT;
+    return Math.max(0, Math.min(1, 1 - deviation));
+}
+
+// Доля объектов портфеля без единого негативного замечания за период.
+function getCleanShareQ(pid) {
+    const p = partnersData[pid];
+    if (!p || !p.dealsCount) return 1.0;
+    const withRemarks = Number(p.objectsWithNegativeRemarkCount) || 0;
+    return Math.max(0, Math.min(1, 1 - (withRemarks / p.dealsCount)));
+}
+
+// Бонус «Голос клиента»: до +5 баллов сверх итога, пропорционально доле
+// положительных отзывов среди всех отзывов партнёра за период.
+function getPositiveReviewBonus(pid) {
+    const p = partnersData[pid];
+    const positive = Number(p?.positiveReviewCount) || 0;
+    const negative = Number(p?.negativeReviewCount) || 0;
+    const total = positive + negative;
+    if (total <= 0) return 0;
+    return POSITIVE_REVIEW_BONUS_MAX * (positive / total);
+}
+
 function getUpravlenkaQ(pid) {
     const record = managementScoresByPartner[String(pid)];
     return record ? record.score : 0;
@@ -2240,8 +2504,6 @@ function getClocksterQ(pid) {
 
     return Math.min(1, (metric.visits ?? 0) / totalObjects);
 }
-function getUmsrmQ(_pid) { return 1.0; }
-
 function formatMetricNumber(value, digits = 2) {
     if (!Number.isFinite(value)) return '0';
     return Number(value).toFixed(digits).replace(/\.00$/, '');
@@ -2343,7 +2605,7 @@ function getRemarksMetricDetail(pid) {
         };
     }
 
-    const reliefFactor = getRemarksReliefFactor(pid);
+    const penaltyPerObject = getRemarksPenaltyPerObject(pid);
 
     const notes = [];
     if (metric.skippedMissingRemarkDate) {
@@ -2358,28 +2620,67 @@ function getRemarksMetricDetail(pid) {
         format: 'percent',
         digits: 0,
         sub: `${metric.totalLateDays}/${metric.rowCount}`,
-        title: `Дней просрочки: ${metric.totalLateDays}, замечаний: ${metric.rowCount}, штраф: ${formatMetricNumber(metric.totalPenalty, 2)}, послабление за объем: x${formatMetricNumber(reliefFactor, 2)}${missingNote}`,
+        title: `Дней просрочки: ${metric.totalLateDays}, замечаний: ${metric.rowCount}, штраф: ${formatMetricNumber(metric.totalPenalty, 2)}, штраф на объект: ${formatMetricNumber(penaltyPerObject, 3)}${missingNote}`,
         calcLines: [
             `Дней просрочки: ${metric.totalLateDays}`,
             `Замечаний: ${metric.rowCount}`,
             `Штраф: ${formatMetricNumber(metric.totalPenalty, 2)}`,
-            `Послабление за объем: x${formatMetricNumber(reliefFactor, 2)}`
+            `Штраф на объект (÷ портфель): ${formatMetricNumber(penaltyPerObject, 3)}`
         ]
     };
 }
 
-function getAuditMetricDetail(pid) {
-    const count = auditCountsByPartner[String(pid)] || 0;
+function getCleanShareMetricDetail(pid) {
+    const p = partnersData[pid];
+    const dealsCount = Number(p?.dealsCount) || 0;
+    const withRemarks = Number(p?.objectsWithNegativeRemarkCount) || 0;
+    if (dealsCount === 0) {
+        return { format: 'percent', digits: 0, sub: 'нет данных', title: 'Нет объектов в портфеле', calcLines: ['Нет объектов в портфеле'] };
+    }
+    const clean = Math.max(0, dealsCount - withRemarks);
     return {
-        displayValue: count,
+        format: 'percent',
         digits: 0,
-        sub: 'сделок',
-        title: count > 0
-            ? `Аудит-сделок за период: ${formatMetricNumber(count, 0)}`
-            : 'Аудит-сделок за выбранный период нет',
-        calcLines: count > 0
-            ? [`Аудит-сделок: ${formatMetricNumber(count, 0)}`]
-            : ['Аудит-сделок за выбранный период нет']
+        sub: `${clean}/${dealsCount}`,
+        title: `Объектов без замечаний: ${clean} из ${dealsCount}`,
+        calcLines: [`Без замечаний: ${clean}`, `Портфель: ${dealsCount}`]
+    };
+}
+
+function getRoundsMetricDetail() {
+    return { format: 'percent', digits: 0, sub: 'заглушка', title: 'Объезды — источник данных подключим позже (пока Q=1.0)' };
+}
+
+function getBudgetMetricDetail() {
+    return { format: 'percent', digits: 0, sub: 'заглушка', title: 'Бюджетная дисциплина — плановых цифр пока нет (Q=1.0)' };
+}
+
+function getAuditMetricDetail(pid) {
+    const items = auditEvalByPartner[String(pid)];
+    const legacyAuditRemarksCount = auditCountsByPartner[String(pid)] || 0; // старое: замечания с источником "от аудитора"
+    if (!items || items.length === 0) {
+        return {
+            format: 'percent',
+            digits: 0,
+            sub: 'нет аудитов',
+            title: 'Аудитов объекта (SPA 1398) за период нет — Q нейтрален',
+            calcLines: [
+                'Аудитов за период нет',
+                `Замечаний с пометкой "от аудитора" (справочно): ${formatMetricNumber(legacyAuditRemarksCount, 0)}`
+            ]
+        };
+    }
+    const avg = items.reduce((sum, s) => sum + s.efficiency, 0) / items.length;
+    return {
+        format: 'percent',
+        digits: 0,
+        sub: `${items.length} аудит(ов)`,
+        title: `Средняя эффективность по ${items.length} аудит(ам): ${formatMetricNumber(avg * 100, 0)}%`,
+        calcLines: [
+            `Аудитов за период: ${items.length}`,
+            `Средняя эффективность: ${formatMetricNumber(avg * 100, 0)}%`,
+            `Замечаний с пометкой "от аудитора" (справочно): ${formatMetricNumber(legacyAuditRemarksCount, 0)}`
+        ]
     };
 }
 
@@ -2572,8 +2873,23 @@ function getDisciplineMetricDetail(pid) {
     };
 }
 
-function getUmsrmMetricDetail() {
-    return { format: 'percent', digits: 0, sub: '100%', title: 'УМС/РМ' };
+function getUmsMetricDetail(pid) {
+    const summary = managementSummaryByPartner[String(pid)];
+    if (!summary || !summary.revenueNetSum) {
+        return { format: 'percent', digits: 0, sub: 'нет данных', title: 'Нет данных по управленке за период' };
+    }
+    const factPct = summary.umsTotalSum / summary.revenueNetSum;
+    return {
+        format: 'percent',
+        digits: 1,
+        displayValue: factPct,
+        sub: formatPercent(factPct, 1),
+        title: `УМС факт: ${formatPercent(factPct, 1)}, норматив: ${formatPercent(UMS_TARGET_PERCENT, 0)} ±${formatPercent(UMS_TOLERANCE_PERCENT, 0)}`,
+        calcLines: [
+            `УМС факт: ${formatPercent(factPct, 1)}`,
+            `Норматив: ${formatPercent(UMS_TARGET_PERCENT, 0)} ±${formatPercent(UMS_TOLERANCE_PERCENT, 0)}`
+        ]
+    };
 }
 
 function buildPartnerBreakdown(pid, rowData = null) {
@@ -2585,7 +2901,7 @@ function buildPartnerBreakdown(pid, rowData = null) {
     const managementRecord = managementScoresByPartner[String(pid)] || null;
     const fotStats = getFotDbStats(pid);
     const clocksterMetric = clocksterMetricsByPartner[String(pid)] || null;
-    const remarksRelief = getRemarksReliefFactor(pid);
+    const remarksPenaltyPerObject = getRemarksPenaltyPerObject(pid);
     const row = rowData || null;
     const overdueRemarkItems = (remarkMetric?.items || []).filter(item => Number(item?.lateDays) > 0);
     const selectedMonth = getSelectedMonth();
@@ -2596,7 +2912,9 @@ function buildPartnerBreakdown(pid, rowData = null) {
         summary: {
             finalScore: row?.matrixTotalScore || 0,
             rawTotal: row?.rawTotal || 0,
-            complexityCoeff: row?.complexityCoeff || 1
+            positiveReviewBonus: row?.positiveReviewBonus || 0,
+            leagueCoeff: row?.leagueCoeff || 1,
+            league: row?.league || 'Золото'
         },
         calls: {
             score: getCallsQ(pid),
@@ -2611,7 +2929,7 @@ function buildPartnerBreakdown(pid, rowData = null) {
         remarks: {
             score: getRemarksQ(pid),
             title: 'Замечания',
-            reliefFactor: remarksRelief,
+            penaltyPerObject: remarksPenaltyPerObject,
             totalLateDays: Number(remarkMetric?.totalLateDays) || 0,
             totalPenalty: Number(remarkMetric?.totalPenalty) || 0,
             overdueCount: overdueRemarkItems.length,
@@ -2636,12 +2954,40 @@ function buildPartnerBreakdown(pid, rowData = null) {
             score: getAuditQ(pid),
             title: 'Аудит',
             totalCount: auditCount,
+            auditEvalCount: (auditEvalByPartner[String(pid)] || []).length,
             lines: [
-                `Аудит-сделок в расчёте: ${formatMetricNumber(auditCount, 0)}`,
-                `Штраф по аудиту: ${formatMetricNumber(row?.auditPenaltyScore || 0, 0)} бал.`,
+                `Аудитов объекта (SPA 1398) за период: ${(auditEvalByPartner[String(pid)] || []).length}`,
+                `Замечаний "от аудитора" в 81 (справочно): ${formatMetricNumber(auditCount, 0)}`,
                 `Итоговый Q аудита: ${formatPercent(getAuditQ(pid), 0)}`
             ],
             items: auditItems
+        },
+        rounds: {
+            score: getRoundsQ(pid),
+            title: 'Объезды',
+            lines: ['Источник данных подключим отдельным приложением — пока Q=1.0']
+        },
+        budget: {
+            score: getBudgetQ(pid),
+            title: 'Бюджетная дисциплина',
+            lines: ['Плановых цифр в управленке пока нет — пока Q=1.0']
+        },
+        ums: {
+            score: getUmsPercentQ(pid),
+            title: '% УМС от дохода',
+            lines: [
+                `Норматив: ${formatPercent(UMS_TARGET_PERCENT, 0)} ±${formatPercent(UMS_TOLERANCE_PERCENT, 0)}`,
+                `Q УМС: ${formatPercent(getUmsPercentQ(pid), 0)}`
+            ]
+        },
+        cleanShare: {
+            score: getCleanShareQ(pid),
+            title: 'Доля объектов без замечаний',
+            lines: [
+                `Объектов с замечаниями: ${Number(partnersData[pid]?.objectsWithNegativeRemarkCount) || 0}`,
+                `Портфель: ${Number(partnersData[pid]?.dealsCount) || 0}`,
+                `Q: ${formatPercent(getCleanShareQ(pid), 0)}`
+            ]
         },
         realization: {
             score: getRealizationQ(pid),
@@ -2710,11 +3056,6 @@ function buildPartnerBreakdown(pid, rowData = null) {
                 ]
                 : ['За выбранный период нарушений не зафиксировано.']
         },
-        umsrm: {
-            score: getUmsrmQ(pid),
-            title: 'УМС/РМ',
-            lines: []
-        }
     };
 }
 
@@ -2728,7 +3069,10 @@ function buildMetricDetails(pid) {
         clockster: getClocksterMetricDetail(pid),
         training: getTrainingMetricDetail(pid),
         discipline: getDisciplineMetricDetail(pid),
-        umsrm: getUmsrmMetricDetail(pid)
+        rounds: getRoundsMetricDetail(pid),
+        budget: getBudgetMetricDetail(pid),
+        ums: getUmsMetricDetail(pid),
+        cleanShare: getCleanShareMetricDetail(pid)
     };
 }
 
@@ -2780,7 +3124,8 @@ function getVisibleMatrixColumns() {
     }
 
     columns.push({ type: 'raw-total', label: 'Сумма' });
-    columns.push({ type: 'coeff', label: 'Коэфф.' });
+    columns.push({ type: 'bonus', label: 'Бонус' });
+    columns.push({ type: 'league', label: 'Лига' });
     columns.push({ type: 'total', label: 'Итог' });
 
     return columns;
@@ -2854,72 +3199,65 @@ function buildExampleMetricMarkup(label, value, lines = []) {
 function formatExampleCalculation(row) {
     const q = row.q;
     const details = row.details || {};
-    const complexityParts = row.complexityParts || {
-        objectsCoeff: 1,
-        areaCoeff: 1,
-        opuCoeff: 1,
-        accountCoeff: 1,
-        total: row.complexityCoeff || 1
-    };
-    const accountCoeffStats = accountCoeffStatsByPartner[String(row.bitrixPartnerId)] || null;
-    const callsCriteria = MATRIX_CRITERIA_BY_KEY.calls;
-    const remarksCriteria = MATRIX_CRITERIA_BY_KEY.remarks;
-    const realizationCriteria = MATRIX_CRITERIA_BY_KEY.realization;
-    const upravlenkaCriteria = MATRIX_CRITERIA_BY_KEY.upravlenka;
     const clocksterCriteria = MATRIX_CRITERIA_BY_KEY.clockster;
+    const roundsCriteria = MATRIX_CRITERIA_BY_KEY.rounds;
     const trainingCriteria = MATRIX_CRITERIA_BY_KEY.training;
-    const disciplineCriteria = MATRIX_CRITERIA_BY_KEY.discipline;
-    const umsrmCriteria = MATRIX_CRITERIA_BY_KEY.umsrm;
+    const budgetCriteria = MATRIX_CRITERIA_BY_KEY.budget;
+    const umsCriteria = MATRIX_CRITERIA_BY_KEY.ums;
+    const callsCriteria = MATRIX_CRITERIA_BY_KEY.calls;
+    const auditCriteria = MATRIX_CRITERIA_BY_KEY.audit;
+    const remarksCriteria = MATRIX_CRITERIA_BY_KEY.remarks;
+    const cleanShareCriteria = MATRIX_CRITERIA_BY_KEY.cleanShare;
 
     const columns = [
         {
-            title: 'Отношения',
+            title: 'Операционка',
             items: [
-                buildExampleMetricMarkup('Обзвон', getExampleMetricValue(details.calls, q.calls), [
-                    `Ответы: ${details.calls?.sub || 'нет данных'}`,
-                    `Вклад: ${(callsCriteria.weight * q.calls * callsCriteria.influence).toFixed(1)} бал.`
-                ]),
-                buildExampleMetricMarkup('Замечания', getExampleMetricValue(details.remarks, q.remarks), [
-                    `Дни просрочки / замечания: ${details.remarks?.sub || 'нет данных'}`,
-                    `Послабление объёма: x${formatMetricNumber(getRemarksReliefFactor(row.bitrixPartnerId), 2)}`,
-                    `Вклад: ${(remarksCriteria.weight * q.remarks * remarksCriteria.influence).toFixed(1)} бал.`
-                ]),
-                buildExampleMetricMarkup('Аудит качества', `${formatMetricNumber(q.audit, 0)} сделок`, [
-                    `Штраф: ${formatMetricNumber(q.audit, 0)} × ${AUDIT_NEGATIVE_DEAL_PENALTY} = -${formatMetricNumber(row.auditPenaltyScore || 0, 0)} бал.`
-                ])
-            ]
-        },
-        {
-            title: 'Деньги',
-            items: [
-                buildExampleMetricMarkup('ФОТ', getExampleMetricValue(details.realization, q.realization), [
-                    `Оплачено / всего: ${details.realization?.sub || 'нет данных'}`,
-                    `Вклад: ${(realizationCriteria.weight * q.realization * realizationCriteria.influence).toFixed(1)} бал.`
-                ]),
-                buildExampleMetricMarkup('Управленка', getExampleMetricValue(details.upravlenka, q.upravlenka), [
-                    `Оценка: ${details.upravlenka?.sub || 'нет данных'}`,
-                    `Вклад: ${(upravlenkaCriteria.weight * q.upravlenka * upravlenkaCriteria.influence).toFixed(1)} бал.`
-                ])
-            ]
-        },
-        {
-            title: 'ОПУ',
-            items: [
-                buildExampleMetricMarkup('Клокстер', getExampleMetricValue(details.clockster, q.clockster), [
+                buildExampleMetricMarkup('Регистрация/отметка', getExampleMetricValue(details.clockster, q.clockster), [
                     `База: ${details.clockster?.sub || 'нет данных'}`,
                     `Вклад: ${(clocksterCriteria.weight * q.clockster * clocksterCriteria.influence).toFixed(1)} бал.`
                 ]),
+                buildExampleMetricMarkup('Объезды', getExampleMetricValue(details.rounds, q.rounds), [
+                    'Заглушка — источник ещё не подключён',
+                    `Вклад: ${(roundsCriteria.weight * q.rounds * roundsCriteria.influence).toFixed(1)} бал.`
+                ]),
                 buildExampleMetricMarkup('Обучение', getExampleMetricValue(details.training, q.training), [
-                    `Средняя сумма: ${details.training?.sub || 'нет данных'}`,
+                    'Заглушка — знаменатель (штат) ещё не подключён',
                     `Вклад: ${(trainingCriteria.weight * q.training * trainingCriteria.influence).toFixed(1)} бал.`
+                ])
+            ]
+        },
+        {
+            title: 'Финансы',
+            items: [
+                buildExampleMetricMarkup('Бюджетная дисциплина', getExampleMetricValue(details.budget, q.budget), [
+                    'Заглушка — плановых цифр пока нет',
+                    `Вклад: ${(budgetCriteria.weight * q.budget * budgetCriteria.influence).toFixed(1)} бал.`
                 ]),
-                buildExampleMetricMarkup('Дисциплины', getExampleMetricValue(details.discipline, q.discipline), [
-                    ...(details.discipline?.sub ? [`Планерки: ${details.discipline.sub}`] : []),
-                    `Вклад: ${(disciplineCriteria.weight * q.discipline * disciplineCriteria.influence).toFixed(1)} бал.`
+                buildExampleMetricMarkup('% УМС', getExampleMetricValue(details.ums, q.ums), [
+                    `Факт: ${details.ums?.sub || 'нет данных'}`,
+                    `Вклад: ${(umsCriteria.weight * q.ums * umsCriteria.influence).toFixed(1)} бал.`
+                ])
+            ]
+        },
+        {
+            title: 'Отношения',
+            items: [
+                buildExampleMetricMarkup('Обзвон (CSAT)', getExampleMetricValue(details.calls, q.calls), [
+                    `Ответы: ${details.calls?.sub || 'нет данных'}`,
+                    `Вклад: ${(callsCriteria.weight * q.calls * callsCriteria.influence).toFixed(1)} бал.`
                 ]),
-                buildExampleMetricMarkup('УМС/РМ', getExampleMetricValue(details.umsrm, q.umsrm), [
-                    `Источник: ${details.umsrm?.sub || 'заглушка'}`,
-                    `Вклад: ${(umsrmCriteria.weight * q.umsrm * umsrmCriteria.influence).toFixed(1)} бал.`
+                buildExampleMetricMarkup('Аудит качества', getExampleMetricValue(details.audit, q.audit), [
+                    `Аудитов за период: ${details.audit?.sub || 'нет данных'}`,
+                    `Вклад: ${(auditCriteria.weight * q.audit * auditCriteria.influence).toFixed(1)} бал.`
+                ]),
+                buildExampleMetricMarkup('Замечания', getExampleMetricValue(details.remarks, q.remarks), [
+                    `Дни просрочки / замечания: ${details.remarks?.sub || 'нет данных'}`,
+                    `Вклад: ${(remarksCriteria.weight * q.remarks * remarksCriteria.influence).toFixed(1)} бал.`
+                ]),
+                buildExampleMetricMarkup('Без замечаний', getExampleMetricValue(details.cleanShare, q.cleanShare), [
+                    `Объекты: ${details.cleanShare?.sub || 'нет данных'}`,
+                    `Вклад: ${(cleanShareCriteria.weight * q.cleanShare * cleanShareCriteria.influence).toFixed(1)} бал.`
                 ])
             ]
         }
@@ -2936,50 +3274,33 @@ function formatExampleCalculation(row) {
         <div class="example-calc-total-title">Итог</div>
         <div class="example-calc-total-grid">
             <div class="example-calc-total-item">
+                <div class="example-calc-total-label">Операционка</div>
+                <div class="example-calc-total-value">${escapeHtml((row.operationsScore || 0).toFixed(1))} бал.</div>
+            </div>
+            <div class="example-calc-total-item">
+                <div class="example-calc-total-label">Финансы</div>
+                <div class="example-calc-total-value">${escapeHtml((row.financeScore || 0).toFixed(1))} бал.</div>
+            </div>
+            <div class="example-calc-total-item">
                 <div class="example-calc-total-label">Отношения</div>
                 <div class="example-calc-total-value">${escapeHtml((row.relationsScore || 0).toFixed(1))} бал.</div>
-            </div>
-            <div class="example-calc-total-item">
-                <div class="example-calc-total-label">Деньги</div>
-                <div class="example-calc-total-value">${escapeHtml((row.moneyScore || 0).toFixed(1))} бал.</div>
-            </div>
-            <div class="example-calc-total-item">
-                <div class="example-calc-total-label">ОПУ</div>
-                <div class="example-calc-total-value">${escapeHtml((row.operationsScore || 0).toFixed(1))} бал.</div>
             </div>
             <div class="example-calc-total-item">
                 <div class="example-calc-total-label">Сумма</div>
                 <div class="example-calc-total-value">${escapeHtml((row.rawTotal || 0).toFixed(1))} бал.</div>
             </div>
             <div class="example-calc-total-item">
-                <div class="example-calc-total-label">К. объектов</div>
-                <div class="example-calc-total-value">${escapeHtml((complexityParts.objectsCoeff || 1).toFixed(3))}</div>
+                <div class="example-calc-total-label">Бонус за отзывы</div>
+                <div class="example-calc-total-value">+${escapeHtml((row.positiveReviewBonus || 0).toFixed(2))} бал.</div>
             </div>
             <div class="example-calc-total-item">
-                <div class="example-calc-total-label">К. площади</div>
-                <div class="example-calc-total-value">${escapeHtml((complexityParts.areaCoeff || 1).toFixed(3))}</div>
-            </div>
-            <div class="example-calc-total-item">
-                <div class="example-calc-total-label">К. ОПУ</div>
-                <div class="example-calc-total-value">${escapeHtml((complexityParts.opuCoeff || 1).toFixed(3))}</div>
-            </div>
-            <div class="example-calc-total-item">
-                <div class="example-calc-total-label">К. аккаунта</div>
-                <div class="example-calc-total-value">${escapeHtml((complexityParts.accountCoeff || 1).toFixed(3))}</div>
-            </div>
-            <div class="example-calc-total-item">
-                <div class="example-calc-total-label">Коэфф. общий</div>
-                <div class="example-calc-total-value">${escapeHtml((row.complexityCoeff || 1).toFixed(3))}</div>
-            </div>
-            <div class="example-calc-total-item">
-                <div class="example-calc-total-label">Минус аудит</div>
-                <div class="example-calc-total-value">-${escapeHtml((row.auditPenaltyScore || 0).toFixed(2))} бал.</div>
+                <div class="example-calc-total-label">Лига</div>
+                <div class="example-calc-total-value">${escapeHtml(row.league || '-')} (${escapeHtml((row.leagueCoeff || 1).toFixed(3))})</div>
             </div>
         </div>
         <div class="example-calc-total-meta">
             Объекты: ${escapeHtml(formatMetricNumber(row.dealsCount || 0, 0))} · площадь: ${escapeHtml((row.totalArea || 0).toFixed(1))} м²<br>
-            Аккаунт: ${escapeHtml(`${accountCoeffStats?.matchedDeals || 0}/${accountCoeffStats?.totalDeals || 0}`)} · нейтрально: ${escapeHtml(formatMetricNumber(accountCoeffStats?.unmatchedDeals || 0, 0))}<br>
-            Промежуточный итог: ${escapeHtml((row.preAuditTotalScore || 0).toFixed(2))} бал.
+            Реализация (справочно, не входит в итог): ${escapeHtml(formatPercent(row.realizationQ || 0, 0))}
         </div>
         <div class="example-calc-final">
             <div class="example-calc-final-label">Финальный итог</div>
@@ -3091,152 +3412,96 @@ function blockScore(criteriaList, getQ) {
     return criteriaList.reduce((sum, c) => sum + c.weight * getQ(c.key) * c.influence, 0);
 }
 
-function getPercentileValue(values, percentile) {
-    if (!Array.isArray(values) || values.length === 0) return 0;
-    const sorted = [...values].sort((a, b) => a - b);
-    const index = (sorted.length - 1) * (percentile / 100);
-    const lowerIndex = Math.floor(index);
-    const upperIndex = Math.min(lowerIndex + 1, sorted.length - 1);
-    const fraction = index - lowerIndex;
-    return sorted[lowerIndex] * (1 - fraction) + sorted[upperIndex] * fraction;
-}
-
-function buildComplexityBenchmark(values) {
-    const numericValues = (values || []).filter(value => Number.isFinite(value) && value >= 0);
-    if (numericValues.length === 0) {
-        return { p10: 0, p50: 0, p90: 0 };
+// Город партнёра — для правила лиги «город=Алматы → не ниже Изумруда».
+function getPartnerCity(name) {
+    const normalized = (name || '').trim().toLowerCase();
+    if (!normalized) return null;
+    for (const entry of PARTNER_CITY_SOURCE) {
+        if (entry.aliases.some(alias => alias.trim().toLowerCase() === normalized)) {
+            return entry.city;
+        }
     }
-
-    return {
-        p10: getPercentileValue(numericValues, 10),
-        p50: getPercentileValue(numericValues, 50),
-        p90: getPercentileValue(numericValues, 90)
-    };
+    return null;
 }
 
-function getRemarksReliefFactor(pid) {
-    const metric = remarkMetricsByPartner[String(pid)];
-    const rowCount = Number(metric?.rowCount) || 0;
-    const benchmark = remarksReliefBenchmark;
-    const p50 = Number(benchmark?.p50) || 0;
-    const p90 = Number(benchmark?.p90) || 0;
-
-    if (rowCount <= 0 || p90 <= p50 || rowCount <= p50) return 1.0;
-    if (rowCount >= p90) return 1 + REMARKS_RELIEF_MAX;
-
-    const ratio = (rowCount - p50) / (p90 - p50);
-    return 1 + (Math.max(0, Math.min(1, ratio)) * REMARKS_RELIEF_MAX);
-}
-
-function buildComplexityBenchmarks() {
+// Коэффициент/лига «Квадрат мечты» (см. «Классификация партнера.xlsx», лист
+// «Вар.1 Порог самопересчёт»): доли объектов/ОПУ/выручки/трудоёмкости,
+// нормированные так, что среднее по сети = 1. В отличие от старого
+// perc-based коэффициента, это значение НЕ умножает итоговый балл — только
+// определяет лигу.
+function buildLeagueAggregates() {
     const rows = Object.entries(partnersData)
-        .map(([pid, partner]) => ({
-            pid,
-            name: (partner?.name ?? partnerMap[pid] ?? '').trim(),
-            dealsCount: Number(partner?.dealsCount) || 0,
-            totalArea: Number(partner?.totalArea) || 0
-        }))
+        .map(([pid, partner]) => {
+            const dealsCount = Number(partner?.dealsCount) || 0;
+            const revenue = Number(partner?.totalOpportunity) || 0;
+            const opuValue = opuComplexityStatsByPartner[String(pid)]?.value ?? 0;
+            const avgCheck = dealsCount > 0 ? revenue / dealsCount : 0;
+            return {
+                pid,
+                name: (partner?.name ?? partnerMap[pid] ?? '').trim(),
+                dealsCount,
+                revenue,
+                opuValue,
+                inverseAvgCheck: avgCheck > 0 ? 1 / avgCheck : 0
+            };
+        })
         .filter(item => item.name && !isExcluded(item.name) && item.dealsCount > 0);
 
-    complexityBenchmarks = {
-        ...complexityBenchmarks,
-        objects: buildComplexityBenchmark(rows.map(item => item.dealsCount)),
-        area: buildComplexityBenchmark(rows.map(item => item.totalArea))
-    };
+    const totals = rows.reduce((acc, row) => {
+        acc.dealsCount += row.dealsCount;
+        acc.revenue += row.revenue;
+        acc.opuValue += row.opuValue;
+        acc.inverseAvgCheck += row.inverseAvgCheck;
+        return acc;
+    }, { dealsCount: 0, revenue: 0, opuValue: 0, inverseAvgCheck: 0 });
+
+    leagueAggregates = { rows, totals, partnerCount: rows.length };
 }
 
-function getPercentileBasedComplexityCoeff(value, benchmark) {
-    const numericValue = Number(value) || 0;
-    const p10 = Number(benchmark?.p10) || 0;
-    const p50 = Number(benchmark?.p50) || 0;
-    const p90 = Number(benchmark?.p90) || 0;
+function getPartnerLeagueCoeff(pid) {
+    const row = (leagueAggregates.rows || []).find(item => item.pid === String(pid));
+    if (!row) return 1.0;
+    const totals = leagueAggregates.totals || {};
+    const n = leagueAggregates.partnerCount || 1;
 
-    if (p50 <= p10 || p90 <= p50) return 1.0;
-    if (numericValue <= p10) return 0.8;
-    if (numericValue >= p90) return 1.2;
+    const doleObjects = totals.dealsCount > 0 ? row.dealsCount / totals.dealsCount : 0;
+    const doleOpu = totals.opuValue > 0 ? row.opuValue / totals.opuValue : 0;
+    const doleRevenue = totals.revenue > 0 ? row.revenue / totals.revenue : 0;
+    const doleTrudo = totals.inverseAvgCheck > 0 ? row.inverseAvgCheck / totals.inverseAvgCheck : 0;
 
-    if (numericValue <= p50) {
-        return 0.8 + ((numericValue - p10) / (p50 - p10)) * 0.2;
-    }
-
-    return 1.0 + ((numericValue - p50) / (p90 - p50)) * 0.2;
+    return ((doleObjects + doleOpu + doleRevenue + doleTrudo) / 4) * n;
 }
 
-function getComplexityOpu(pid) {
-    const stat = opuComplexityStatsByPartner[String(pid)];
-    if (!stat) return 1.0;
-    const baseCoeff = getPercentileBasedComplexityCoeff(stat.value, complexityBenchmarks.opu);
-    return applyHiddenComplexityBoost(pid, 'opu', baseCoeff);
-}
-
-function getObjectsComplexityCoeff(pid) {
+// Лиги — Вариант 1 (пороговый + привилегия для Алматы), подтверждено с заказчиком.
+function getPartnerLeague(pid) {
+    const coeff = getPartnerLeagueCoeff(pid);
     const p = partnersData[pid];
-    return getPercentileBasedComplexityCoeff(p?.dealsCount || 0, complexityBenchmarks.objects);
-}
-
-function getAreaComplexityCoeff(pid) {
-    const p = partnersData[pid];
-    const baseCoeff = getPercentileBasedComplexityCoeff(p?.totalArea || 0, complexityBenchmarks.area);
-    return applyHiddenComplexityBoost(pid, 'area', baseCoeff);
-}
-
-function getAccountComplexityCoeff(pid) {
-    const baseCoeff = accountCoeffStatsByPartner[String(pid)]?.coeff ?? 1.0;
-    return applyHiddenComplexityBoost(pid, 'account', baseCoeff);
-}
-
-function applyHiddenComplexityBoost(pid, part, coeff) {
-    const delta = Number(HIDDEN_COMPLEXITY_BOOSTS[String(pid)]?.[part]) || 0;
-    return Math.max(0.8, Math.min(1.2, (Number(coeff) || 1) + delta));
-}
-
-function getComplexityParts(pid) {
-    const objectsCoeff = getObjectsComplexityCoeff(pid);
-    const areaCoeff = getAreaComplexityCoeff(pid);
-    const opuCoeff = getComplexityOpu(pid);
-    const accountCoeff = getAccountComplexityCoeff(pid);
-    const total = (objectsCoeff + areaCoeff + opuCoeff + accountCoeff) / 4;
-
-    return {
-        objectsCoeff,
-        areaCoeff,
-        opuCoeff,
-        accountCoeff,
-        total
-    };
-}
-
-function getComplexityCoeff(pid) {
-    return getComplexityParts(pid).total;
+    const city = getPartnerCity(p?.name);
+    if (coeff >= 1.2) return 'Бриллиант';
+    if (coeff >= 0.85 || city === 'Алматы') return 'Изумруд';
+    return 'Золото';
 }
 
 function buildComplexityTooltip(row) {
-    const parts = row?.complexityParts || {};
-    const objectBench = complexityBenchmarks.objects || {};
-    const areaBench = complexityBenchmarks.area || {};
-    const opuBench = complexityBenchmarks.opu || {};
-    const accountStats = accountCoeffStatsByPartner[String(row?.bitrixPartnerId)] || {};
-    const opuStats = opuComplexityStatsByPartner[String(row?.bitrixPartnerId)] || null;
+    const pid = String(row?.bitrixPartnerId);
+    const totals = leagueAggregates.totals || {};
+    const rowStats = (leagueAggregates.rows || []).find(item => item.pid === pid) || {};
+    const opuStats = opuComplexityStatsByPartner[pid] || null;
+
+    const doleObjects = totals.dealsCount > 0 ? rowStats.dealsCount / totals.dealsCount : 0;
+    const doleOpu = totals.opuValue > 0 ? rowStats.opuValue / totals.opuValue : 0;
+    const doleRevenue = totals.revenue > 0 ? rowStats.revenue / totals.revenue : 0;
+    const doleTrudo = totals.inverseAvgCheck > 0 ? rowStats.inverseAvgCheck / totals.inverseAvgCheck : 0;
 
     const lines = [
-        `Общий коэф.: ${(row?.complexityCoeff || 1).toFixed(3)}`,
+        `Лига: ${row?.league || '-'} (коэф. ${(row?.leagueCoeff || 1).toFixed(3)})`,
         '',
-        `К. объектов: ${(parts.objectsCoeff || 1).toFixed(3)}`,
-        `Объектов в 69: ${row?.dealsCount || 0}`,
-        `Сеть p10/p50/p90: ${Math.round(objectBench.p10 || 0)} / ${Math.round(objectBench.p50 || 0)} / ${Math.round(objectBench.p90 || 0)}`,
+        `Доля объектов: ${(doleObjects * 100).toFixed(1)}% (${row?.dealsCount || 0}/${totals.dealsCount || 0})`,
+        `Доля ОПУ: ${(doleOpu * 100).toFixed(1)}% (значение ${opuStats ? opuStats.value : '-'}, источник: ${opuStats?.sourceName || 'нет ручного значения'})`,
+        `Доля выручки: ${(doleRevenue * 100).toFixed(1)}%`,
+        `Доля трудоёмкости: ${(doleTrudo * 100).toFixed(1)}%`,
         '',
-        `К. площади: ${(parts.areaCoeff || 1).toFixed(3)}`,
-        `Площадь: ${(row?.totalArea || 0).toFixed(1)} м²`,
-        `Сеть p10/p50/p90: ${Math.round(areaBench.p10 || 0)} / ${Math.round(areaBench.p50 || 0)} / ${Math.round(areaBench.p90 || 0)} м²`,
-        '',
-        `К. ОПУ: ${(parts.opuCoeff || 1).toFixed(3)}`,
-        `Значение ОПУ: ${opuStats ? opuStats.value : '-'}`,
-        `Источник: ${opuStats?.sourceName || 'нет ручного значения'}`,
-        `Сеть p10/p50/p90: ${Math.round(opuBench.p10 || 0)} / ${Math.round(opuBench.p50 || 0)} / ${Math.round(opuBench.p90 || 0)}`,
-        '',
-        `К. аккаунта: ${(parts.accountCoeff || 1).toFixed(3)}`,
-        `Совпало сделок: ${accountStats.matchedDeals || 0}/${accountStats.totalDeals || 0}`,
-        `Не найдено: ${accountStats.unmatchedDeals || 0}`
+        `Город: ${getPartnerCity(row?.name) || 'не определён'}`
     ];
 
     return lines.join('\n').replace(/"/g, '&quot;');
@@ -3271,30 +3536,28 @@ function buildMatrixRows() {
 
         const data = p || { name, dealsCount: 0, totalScore: 0, totalOpportunity: 0, totalArea: 0, dealIds: [], realizationScores: [], remarkScores: [] };
         const q = {
-            calls: getCallsQ(pid),
-            remarks: getRemarksQ(pid),
-            audit: getAuditQ(pid),
-            realization: getRealizationQ(pid),
-            upravlenka: getUpravlenkaQ(pid),
             clockster: getClocksterQ(pid),
+            rounds: getRoundsQ(pid),
             training: getTrainingQ(pid),
-            discipline: getDisciplineQ(pid),
-            umsrm: getUmsrmQ(pid),
+            budget: getBudgetQ(pid),
+            ums: getUmsPercentQ(pid),
+            calls: getCallsQ(pid),
+            audit: getAuditQ(pid),
+            remarks: getRemarksQ(pid),
+            cleanShare: getCleanShareQ(pid),
         };
+        // Реализация (FOT DB) — оставлена справочно, вне 100-балльной шкалы (по решению заказчика).
+        const realizationQ = getRealizationQ(pid);
         const details = buildMetricDetails(pid);
 
-        const relationsCriteria = MATRIX.relations.filter(criteria => criteria.key !== 'audit');
-        const relationsScore = blockScore(relationsCriteria, k => q[k] ?? 1.0);
-        const moneyScore = blockScore(MATRIX.money, k => q[k] ?? 1.0);
         const operationsScore = blockScore(MATRIX.operations, k => q[k] ?? 1.0);
-        const rawTotal = relationsScore + moneyScore + operationsScore;
-        const complexityParts = getComplexityParts(pid);
-        const complexityCoeff = complexityParts.total;
-        const displayedRawTotal = roundTo(rawTotal, 1);
-        const displayedComplexityCoeff = roundTo(complexityCoeff, 2);
-        const preAuditTotalScore = displayedRawTotal * displayedComplexityCoeff;
-        const auditPenaltyScore = q.audit * AUDIT_NEGATIVE_DEAL_PENALTY;
-        const matrixTotalScore = roundTo(preAuditTotalScore - auditPenaltyScore, 2);
+        const financeScore = blockScore(MATRIX.finance, k => q[k] ?? 1.0);
+        const relationsScore = blockScore(MATRIX.relations, k => q[k] ?? 1.0);
+        const rawTotal = operationsScore + financeScore + relationsScore;
+        const positiveReviewBonus = getPositiveReviewBonus(pid);
+        const matrixTotalScore = roundTo(rawTotal + positiveReviewBonus, 2);
+        const leagueCoeff = getPartnerLeagueCoeff(pid);
+        const league = getPartnerLeague(pid);
         const avgScore = data.dealsCount ? data.totalScore / data.dealsCount : 0;
         const rowDraft = {
             bitrixPartnerId: pid,
@@ -3302,20 +3565,19 @@ function buildMatrixRows() {
             q,
             dealsCount: data.dealsCount || 0,
             totalArea: data.totalArea || 0,
-            relationsScore,
-            moneyScore,
             operationsScore,
+            financeScore,
+            relationsScore,
             rawTotal,
-            complexityCoeff,
-            complexityParts,
-            preAuditTotalScore,
-            auditPenaltyScore,
+            realizationQ,
+            positiveReviewBonus,
+            leagueCoeff,
+            league,
             matrixTotalScore
         };
 
         matrixRows.push({
             ...rowDraft,
-            partnerLevel: matrixTotalScore >= 80 ? 'A' : matrixTotalScore >= 50 ? 'B' : 'C',
             statusZone: avgScore > 0.8 ? 'green' : avgScore > 0.5 ? 'yellow' : 'red',
             statusLabel: avgScore > 0.8 ? 'Excellent' : avgScore > 0.5 ? 'Good' : 'Needs Review',
             details,
@@ -3368,7 +3630,7 @@ function renderUI() {
             tr.className = 'partner-row';
             const qk = row.q;
             const dk = row.details || {};
-            const tooltip = `Сделок: ${row.dealsCount}\nПлощадь: ${(row.totalArea || 0).toFixed(1)} м²\nЗамечаний: ${row.remarksCount}\nДней просрочки: ${row.remarksLateDaysTotal || 0}\nПослабление по замечаниям: x${formatMetricNumber(getRemarksReliefFactor(row.bitrixPartnerId), 2)}\nБез даты замечания: ${row.remarkMissingDateCount || 0}\nБез обратной связи: ${row.remarkMissingFeedbackCount || 0}\nУровень: ${row.partnerLevel}\nID: ${row.bitrixPartnerId}`;
+            const tooltip = `Сделок: ${row.dealsCount}\nПлощадь: ${(row.totalArea || 0).toFixed(1)} м²\nЗамечаний: ${row.remarksCount}\nДней просрочки: ${row.remarksLateDaysTotal || 0}\nШтраф на объект: ${formatMetricNumber(getRemarksPenaltyPerObject(row.bitrixPartnerId), 3)}\nБез даты замечания: ${row.remarkMissingDateCount || 0}\nБез обратной связи: ${row.remarkMissingFeedbackCount || 0}\nЛига: ${row.league}\nБонус за отзывы: +${formatMetricNumber(row.positiveReviewBonus || 0, 2)}\nID: ${row.bitrixPartnerId}`;
             const complexityTooltip = buildComplexityTooltip(row);
 
             const cells = visibleColumns.map((column, index) => {
@@ -3386,8 +3648,10 @@ function renderUI() {
                         return renderMetricCell(qk[column.metricKey], dk[column.metricKey]).replace('<td', `<td class="${className}"`);
                     case 'raw-total':
                         return `<td${classAttr}>${(row.rawTotal || 0).toFixed(1)}</td>`;
-                    case 'coeff':
-                        return `<td${classAttr} title="${complexityTooltip}">${(row.complexityCoeff || 1).toFixed(2)}</td>`;
+                    case 'league':
+                        return `<td${classAttr} title="${complexityTooltip}">${escapeHtml(row.league || '-')}</td>`;
+                    case 'bonus':
+                        return `<td${classAttr}>+${(row.positiveReviewBonus || 0).toFixed(1)}</td>`;
                     case 'total':
                         return `<td${classAttr}><strong>${(row.matrixTotalScore || 0).toFixed(1)}</strong></td>`;
                     default:
@@ -3420,10 +3684,10 @@ function updateStats(matrixData, partners) {
         const riskRow = activeMatrixRows[activeMatrixRows.length - 1];
         const totalAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.matrixTotalScore || 0), 0) / activeMatrixRows.length).toFixed(1);
         const relationsAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.relationsScore || 0), 0) / activeMatrixRows.length).toFixed(1);
-        const moneyAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.moneyScore || 0), 0) / activeMatrixRows.length).toFixed(1);
+        const moneyAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.financeScore || 0), 0) / activeMatrixRows.length).toFixed(1);
         const operationsAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.operationsScore || 0), 0) / activeMatrixRows.length).toFixed(1);
-        const managementAvg = activeMatrixRows.reduce((sum, row) => sum + ((Number(row.q?.upravlenka) || 0) * 100), 0) / activeMatrixRows.length;
-        const complexityAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.complexityCoeff || 1), 0) / activeMatrixRows.length).toFixed(2);
+        const managementAvg = activeMatrixRows.reduce((sum, row) => sum + ((Number(row.q?.budget) || 0) * 100), 0) / activeMatrixRows.length;
+        const complexityAvg = (activeMatrixRows.reduce((sum, row) => sum + (row.leagueCoeff || 1), 0) / activeMatrixRows.length).toFixed(2);
         const totalObjects = activeMatrixRows.reduce((sum, row) => sum + (row.dealsCount || 0), 0);
         const totalArea = activeMatrixRows.reduce((sum, row) => sum + (row.totalArea || 0), 0);
         const overdueRemarks = activeMatrixRows.reduce((sum, row) => {
@@ -3481,6 +3745,7 @@ function buildSharedCachePayload(localPayload) {
         disciplineItems: localPayload.disciplineItems,
         opuItems: localPayload.opuItems,
         managementItems: localPayload.managementItems,
+        auditEvalItems: localPayload.auditEvalItems,
         fotDbItems: localPayload.fotDbItems,
         clocksterMetricsCache: localPayload.clocksterMetricsCache
     };
@@ -3506,7 +3771,7 @@ function saveCache() {
             selectedExamplePartnerId,
             expandedMatrixGroups,
             clocksterMetricsCache,
-            partnerMap, companyMap, accountCoefficientRows, deals69, deals79, remarkDeals, callsItems, disciplineItems, opuItems, managementItems, list115PartnerByElementId, lastUserMap, fotDbItems
+            partnerMap, companyMap, accountCoefficientRows, deals69, deals79, remarkDeals, callsItems, disciplineItems, opuItems, managementItems, auditEvalItems, list115PartnerByElementId, lastUserMap, fotDbItems
         };
         localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
         queueSharedCacheSync(payload);
@@ -3538,6 +3803,7 @@ function applyBootstrapSnapshot(snapshot) {
     disciplineItems = snapshot.disciplineItems || [];
     opuItems = snapshot.opuItems || [];
     managementItems = snapshot.managementItems || [];
+    auditEvalItems = snapshot.auditEvalItems || [];
     fotDbItems = snapshot.fotDbItems || [];
     clocksterMetricsCache = snapshot.clocksterMetricsCache || {};
     clocksterMetricsByPartner = clocksterMetricsCache[getClocksterMonthKey()] || {};
@@ -3673,6 +3939,7 @@ function applyTestState(patch = {}) {
     if (Object.hasOwn(patch, 'disciplineItems')) disciplineItems = patch.disciplineItems;
     if (Object.hasOwn(patch, 'opuItems')) opuItems = patch.opuItems;
     if (Object.hasOwn(patch, 'managementItems')) managementItems = patch.managementItems;
+    if (Object.hasOwn(patch, 'auditEvalItems')) auditEvalItems = patch.auditEvalItems;
     if (Object.hasOwn(patch, 'fotDbItems')) fotDbItems = patch.fotDbItems;
     if (Object.hasOwn(patch, 'partnerMap')) partnerMap = patch.partnerMap;
     if (Object.hasOwn(patch, 'companyMap')) companyMap = patch.companyMap;
@@ -3702,6 +3969,7 @@ function resetTestState() {
         disciplineItems: [],
         opuItems: [],
         managementItems: [],
+        auditEvalItems: [],
         fotDbItems: [],
         partnerMap: {},
         companyMap: {},
@@ -3718,12 +3986,13 @@ function resetTestState() {
         auditCountsByPartner: {},
         expandedMatrixGroups: {
             relations: false,
-            money: false,
+            finance: false,
             operations: false
         }
     });
     callsByPartner = {};
     opuByPartner = {};
+    auditEvalByPartner = {};
     fotTriggerDealsByPartner = {};
     disciplineStatsByPartner = {};
     managementScoresByPartner = {};
@@ -3733,19 +4002,14 @@ function resetTestState() {
     auditCountsByPartner = {};
     accountCoeffStatsByPartner = {};
     opuComplexityStatsByPartner = {};
-    remarksReliefBenchmark = null;
-    complexityBenchmarks = {
-        objects: null,
-        area: null,
-        opu: null
-    };
+    leagueAggregates = { rows: [], totals: {}, partnerCount: 0 };
     fotDbStatsByPartnerMonth = {};
     fotDbPartnerLookup = {};
     selectedExamplePartnerId = '';
     lastRenderedTimestamp = 0;
     expandedMatrixGroups = {
         relations: false,
-        money: false,
+        finance: false,
         operations: false
     };
     matrixRows = [];
@@ -3769,6 +4033,8 @@ const DASHBOARD_TEST_API = {
     getFilteredDeals69,
     getCallsQ,
     getRemarksQ,
+    getRemarksPenaltyPerObject,
+    getRemarkSeverityWeight,
     getAuditQ,
     getRealizationQ,
     getTrainingQ,
@@ -3779,7 +4045,16 @@ const DASHBOARD_TEST_API = {
     getManagementSummaryForPartner: pid => ({ ...(managementSummaryByPartner[String(pid)] || {}) }),
     getClocksterQ,
     buildClocksterMetrics,
-    applyHiddenComplexityBoost,
+    getRoundsQ,
+    getBudgetQ,
+    computeAuditItemScore,
+    getUmsPercentQ,
+    getCleanShareQ,
+    getPositiveReviewBonus,
+    buildLeagueAggregates,
+    getPartnerLeagueCoeff,
+    getPartnerLeague,
+    getPartnerCity,
     normalizeMonthKeyValue,
     getMatrixRowsSnapshot: () => matrixRows.map(row => ({ ...row }))
 };
